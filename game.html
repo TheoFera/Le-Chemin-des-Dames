@@ -6,11 +6,60 @@
 <style>
 html,body{margin:0;padding:0;background:#2b2b2b;overflow:hidden;}
 #ui{position:absolute;top:0;left:0;color:#fff;font-family:sans-serif;padding:10px;z-index:10;}
-#message{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;font-family:sans-serif;font-size:32px;text-align:center;pointer-events:none;z-index:10;}
+#message{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;font-family:sans-serif;font-size:32px;text-align:center;pointer-events:none;z-index:10;display: none;}
 canvas{display: block;} /* Prevent margin below canvas */
+#startMenu {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 20px;
+  z-index: 20;
+}
+
+#startMenu h1 {
+  font-size: 4rem;
+  margin-bottom: 1rem;
+}
+
+#startMenu p {
+  font-size: 1.1rem;
+  max-width: 600px;
+  margin: 0.5rem 0;
+}
+
+#startMenu .press-key {
+  margin-top: 2rem;
+  font-style: italic;
+}
 </style>
 </head>
 <body>
+    <div id="startMenu">
+        <h1>Le Chemin des Dames</h1>
+        <p>
+          Vous êtes un officier français chargé de conduire le 5<sup>e</sup> régiment
+          à l’assaut du Chemin des Dames.  
+          Chaque pas est un combat, chaque tranchée un défi.  
+          Menez vos hommes vers la victoire, mais prenez garde aux obus
+          et aux barbelés ennemis…
+        </p>
+        <p>
+          <strong>Commandes :</strong><br>
+          ↑ / W : monter  
+          ↓ / S : descendre  
+          ← / A : ramper  
+          <kbd>ESPACE</kbd> (maintenir 2 secs puis relacher) : tirer  
+        </p>
+        <p class="press-key">Appuyez sur une touche pour démarrer</p>
+      </div>
+      
 <canvas id="game"></canvas>
 <div id="ui">Tranchées capturées: <span id="score">0</span></div>
 <div id="message">Appuie sur ESPACE pour démarrer</div>
@@ -133,9 +182,9 @@ const EXPLOSION_RADIUS = 80; // Max radius for blast and crater
 const EXPLOSION_SHADOW_DURATION = 1200; // ms
 const EXPLOSION_BLAST_DURATION = 200; // ms
 const EXPLOSION_CRATER_DURATION = 3000; // ms (how long crater stays visible off-screen before pooling/removal)
-const EXPLOSION_SPAWN_INTERVAL_MIN = 200; // ms min between random explosions
+const EXPLOSION_SPAWN_INTERVAL_MIN = 300; // ms min between random explosions
 const EXPLOSION_SPAWN_INTERVAL_MAX = 1200; // ms max between random explosions
-const EXPLOSION_POOL_SIZE = 200; // Max explosions in pool
+const EXPLOSION_POOL_SIZE = 50; // Max explosions in pool
 
 // --- Decorative crater spawn intervals (ms) ---
 const DECORATIVE_CRATER_SPAWN_MIN = 300;
@@ -199,7 +248,7 @@ window.addEventListener('keydown', e => {
     }
 
     /* ---------- 1) lancement / reset ---------- */
-    if (gameState === 'ready' && e.code === 'Space') {
+    if (gameState === 'ready') {
         startGame();
         return;
     }
@@ -1280,6 +1329,9 @@ function returnExplosion(explosion) {
 
 // --- Game Logic Functions ---
 function startGame() {
+    // 0. Masquer le menu de démarrage
+    document.getElementById('startMenu').style.display = 'none';
+
     if (gameState !== 'ready') return;
     resetGame();
 }
@@ -1970,7 +2022,7 @@ function gameLoop(time) {
 
 // --- Initialization ---
 // Wait for initial resize and set up message
-document.getElementById('message').style.display = 'block';
+//document.getElementById('message').style.display = 'block';
 // Start game loop only when Space is pressed in 'ready' state (handled by key listener)
 
 // Initial pool creation (already done in resetGame, but good to have here too if not resetting immediately)
