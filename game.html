@@ -1,0 +1,1987 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>L’Assaut du Chemin des Dames</title>
+<style>
+html,body{margin:0;padding:0;background:#2b2b2b;overflow:hidden;}
+#ui{position:absolute;top:0;left:0;color:#fff;font-family:sans-serif;padding:10px;z-index:10;}
+#message{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;font-family:sans-serif;font-size:32px;text-align:center;pointer-events:none;z-index:10;}
+canvas{display: block;} /* Prevent margin below canvas */
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="ui">Tranchées capturées: <span id="score">0</span></div>
+<div id="message">Appuie sur ESPACE pour démarrer</div>
+
+<!-- Sound Elements -->
+<!-- Single sounds -->
+<audio id="bgMusic" src="./sounds/battlefield_loop.mp3" loop preload="auto"></audio>
+<audio id="startWhistle" src="./sounds/whistle_start.mp3" preload="auto"></audio>
+<audio id="trenchCapture" src="./sounds/trench_capture.mp3" preload="auto"></audio>
+
+<!-- Pooled sounds (for frequent, overlapping effects) -->
+<!-- Explosion Pool (adjust count based on how many simultaneous explosions you expect) -->
+<audio class="explosionSound" src="./sounds/explosion1.mp3" preload="auto"></audio>
+<audio class="explosionSound" src="./sounds/explosion2.mp3" preload="auto"></audio>
+<audio class="explosionSound" src="./sounds/explosion3.mp3" preload="auto"></audio>
+<audio class="explosionSound" src="./sounds/explosion4.mp3" preload="auto"></audio>
+<audio class="explosionSound" src="./sounds/explosion5.mp3" preload="auto"></audio>
+<audio class="explosionSound" src="./sounds/explosion6.mp3" preload="auto"></audio>
+
+<!-- Shot Pool (adjust count) -->
+<audio class="shotSound" src="./sounds/shot1.mp3" preload="auto"></audio>
+<audio class="shotSound" src="./sounds/shot2.mp3" preload="auto"></audio>
+<audio class="shotSound" src="./sounds/shot3.mp3" preload="auto"></audio>
+<audio class="shotSound" src="./sounds/shot4.mp3" preload="auto"></audio>
+<audio class="shotSound" src="./sounds/shot5.mp3" preload="auto"></audio>
+<audio class="shotSound" src="./sounds/shot6.mp3" preload="auto"></audio>
+
+<!-- Death Pool (adjust count) -->
+<audio class="deathSound" src="./sounds/death1.mp3" preload="auto"></audio>
+<audio class="deathSound" src="./sounds/death2.mp3" preload="auto"></audio>
+<audio class="deathSound" src="./sounds/death3.mp3" preload="auto"></audio>
+<audio class="deathSound" src="./sounds/death4.mp3" preload="auto"></audio>
+<audio class="deathSound" src="./sounds/death5.mp3" preload="auto"></audio>
+<audio class="deathSound" src="./sounds/death6.mp3" preload="auto"></audio>
+<audio class="deathSound" src="./sounds/death7.mp3" preload="auto"></audio>
+<audio class="deathSound" src="./sounds/death8.mp3" preload="auto"></audio>
+<audio class="deathSound" src="./sounds/death9.mp3" preload="auto"></audio>
+<audio class="deathSound" src="./sounds/death10.mp3" preload="auto"></audio>
+<audio class="deathSound" src="./sounds/death11.mp3" preload="auto"></audio>
+<audio class="deathSound" src="./sounds/death12.mp3" preload="auto"></audio>
+
+<!-- Whiz-by Pool (adjust count) -->
+<audio class="whizSound" src="./sounds/whiz1.mp3" preload="auto"></audio>
+<audio class="whizSound" src="./sounds/whiz2.mp3" preload="auto"></audio>
+<audio class="whizSound" src="./sounds/whiz3.mp3" preload="auto"></audio>
+
+<!-- Incoming Shell Pool (adjust count) -->
+<audio class="incomingSound" src="./sounds/incoming1.mp3" preload="auto"></audio>
+<audio class="incomingSound" src="./sounds/incoming2.mp3" preload="auto"></audio>
+<audio class="incomingSound" src="./sounds/incoming3.mp3" preload="auto"></audio>
+
+
+<script>
+(function(){
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// --- Debug Flags ---
+const DEBUG_DRAW_HITBOXES = false; // Set to true to see the collision rectangles
+
+// --- Sprite Sheet Loading ---
+const spriteSheetImage = new Image();
+let spritesLoaded = false;
+spriteSheetImage.onload = () => {
+    spritesLoaded = true;
+    console.log('Sprites loaded');
+    // If the game was waiting, it can now fully render sprites
+    // No need to explicitly call renderGame here, the loop will handle it.
+};
+spriteSheetImage.onerror = () => {
+    console.error('Failed to load sprites.png');
+    // Handle error, maybe continue without sprites or show error message
+    // For now, game will run with hitboxes only if DEBUG_DRAW_HITBOXES is true
+};
+spriteSheetImage.src = 'sprites.png';
+
+// --- Sprite Map (Define coordinates of each sprite in sprites.png) ---
+// You MUST adjust these values (sx, sy, sw, sh) based on YOUR sprites.png layout
+// Note: These dimensions are the SOURCE dimensions in the sprite sheet.
+// The sprites will be SCALED to the entity's hitbox dimensions (this.w, this.h)
+const spriteMap = {
+    player_running1: { sx: 0, sy: 520, sw: 228, sh: 246 },
+    player_running2: { sx: 222, sy: 520, sw: 231, sh: 246 },
+    player_crawling: { sx: 283, sy: 786, sw: 350, sh: 186 },
+    player_firing:   { sx: 460, sy: 520, sw: 228, sh: 238 },
+    ally_running1: { sx: 0, sy: 0, sw: 228, sh: 238 },
+    ally_running2: { sx: 230, sy: 0, sw: 237, sh: 238 },
+    ally_crawling:   { sx: 314, sy: 232, sw: 355, sh: 186 }, // Assumed same as player crawling sprite
+    ally_firing:   { sx: 486, sy: 0, sw: 228, sh: 238 },
+    enemy_standing:  { sx: 0, sy: 249, sw: 255, sh: 262 }, // Note: Large dimensions, will be scaled
+    barbed_wire:     { sx: 752, sy: 0, sw: 146, sh: 615 }, // Note: Large dimensions, will be scaled/stretched
+};
+
+// --- Game Constants (Centralized) ---
+const WORLD_SPEED = 80; // px/s (terrain scrolling speed when player is standing/not charging)
+const PLAYER_X = 80; // Fixed player horizontal position
+const PLAYER_SPEED_Y = 100; // px/s vertical
+const PLAYER_WIDTH = 24; // Hitbox width
+const PLAYER_HEIGHT_STANDING = 32; // Hitbox height standing
+const PLAYER_HEIGHT_CRAWLING = 24; // Hitbox height crawling
+const PLAYER_WIDTH_CRAWLING = 34; // ← largeur souhaitée quand on rampe
+const PLAYER_CHARGE_DURATION = 500; // ms to charge a shot
+const CRAWL_SPEED_FACTOR = 0.5;  // 50 % de la vitesse normale quand on rampe (affecte monde pour joueur, et allié pour allié)
+const SHOOT_SPEED_FACTOR = 0.2; // 20 % de la vitesse normale quand le joueur charge (affecte monde)
+
+const BULLET_SPEED = 850; // px/s
+const BULLET_WIDTH = 8;
+const BULLET_HEIGHT = 3;
+const BULLET_POOL_SIZE = 100; // Max bullets in pool
+
+const BARBED_WIDTH = 20; // Hitbox width
+const BARBED_HEIGHT = 100; // Base hitbox height (can vary)
+
+const TRENCH_WIDTH = 40;
+const TRENCH_MIN_DIST = 550; // Min pixels between trench spawns
+const TRENCH_MAX_DIST = 800; // Max pixels between trench spawns
+const TRENCH_SCORE_DIST_OFFSET = 0; // Player needs to pass trench.x + width + offset to score
+
+const EXPLOSION_RADIUS = 80; // Max radius for blast and crater
+const EXPLOSION_SHADOW_DURATION = 1200; // ms
+const EXPLOSION_BLAST_DURATION = 200; // ms
+const EXPLOSION_CRATER_DURATION = 3000; // ms (how long crater stays visible off-screen before pooling/removal)
+const EXPLOSION_SPAWN_INTERVAL_MIN = 200; // ms min between random explosions
+const EXPLOSION_SPAWN_INTERVAL_MAX = 1200; // ms max between random explosions
+const EXPLOSION_POOL_SIZE = 200; // Max explosions in pool
+
+// --- Decorative crater spawn intervals (ms) ---
+const DECORATIVE_CRATER_SPAWN_MIN = 300;
+const DECORATIVE_CRATER_SPAWN_MAX = 4000;
+
+const ALLY_COUNT_INITIAL = 40 + randomRange(1,10);
+const ALLY_REINFORCEMENT_BASE = 15; // Base reinforcements (minus score)
+const ALLY_VERTICAL_SPEED = 40; // px/s random vertical move
+const ALLY_RANDOM_MOVE_INTERVAL = 2000; // ms how often ally changes random vertical speed
+const ALLY_SHOOT_COOLDOWN_MIN = 2000; // ms 
+const ALLY_SHOOT_COOLDOWN_MAX = 12000; // ms
+const ALLY_CHARGE_DURATION = 2000; // ms for ally charged shot
+const ALLY_BARBED_WIRE_DETECTION_DIST = 100; // px distance ahead/behind to check for barbed wire
+const ALLY_SPEED_VARIATION = 0.05; // +/- 5% variation in base speed relative to world
+const ALLY_CRATER_DETECTION_RADIUS = -20; // px radius around crater center to trigger check (0 means check against explosion radius)
+const ALLY_RANDOM_CRAWL_DURATION = 2000; // ms duration of random crawl
+const ALLY_CRAWL_CHANCE_IN_CRATER = 0.008; // 0.8% chance per update cycle when near crater
+
+const ENEMY_SPAWN_COUNT_BASE = 8; // Base enemies per trench spawn
+const ENEMY_SPAWN_COUNT_PER_SCORE = 1; // Additional enemies per score point
+//const ENEMY_VERTICAL_CHASE_SPEED = 70; // px/s vertical move to chase player (currently unused)
+const ENEMY_SHOOT_COOLDOWN_MIN = 2000; // ms
+const ENEMY_SHOOT_COOLDOWN_MAX = 5000; // ms
+const ENEMY_SHOOT_ALIGNMENT_THRESHOLD = 90; // px vertical difference to allow shooting
+
+
+// --- Game State Variables ---
+let gameState = 'ready';
+let score = 0;
+let lastTime = 0;
+let nextTrenchX = TRENCH_MIN_DIST; // Where the next trench will be spawned (relative to canvas right edge initially)
+let timeSinceLastExplosion = 0;
+let nextExplosionTime = 0;
+let startTimer = 0;         // délai avant défilement
+let worldScroll = 0;
+
+let chargeDelayActive = false;   // ← empêche plusieurs déclenchements
+
+// --- Entity Lists ---
+let player;
+let trenches = [];
+let barbedWires = [];
+let bullets = [];
+let allies = [];
+let enemies = [];
+let explosions = [];
+let decorativeCraters = [];
+
+let nextDecorativeCraterTime = 0;
+
+// --- Object Pools ---
+let bulletPool = [];
+let explosionPool = [];
+
+// --- Input Handling ---
+const keys = {};
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','KeyW','KeyS','KeyA','KeyD'].includes(e.code)) {
+        e.preventDefault();
+    }
+
+    /* ---------- 1) lancement / reset ---------- */
+    if (gameState === 'ready' && e.code === 'Space') {
+        startGame();
+        return;
+    }
+    if (gameState === 'gameover' && e.code === 'Space') {
+        resetGame();
+        return;
+    }
+
+    /* ---------- 2) attente du coup de sifflet ---------- */
+    if (gameState === 'waitingCharge' && e.code === 'ArrowRight' && !chargeDelayActive) {
+        chargeDelayActive = true;                           // bloque la répétition
+        document.getElementById('message').innerText = 'Chargez !';
+
+        soundManager.playSound('startWhistle');
+
+        setTimeout(() => {
+            document.getElementById('message').style.display = 'none';
+
+            gameState = 'playing';
+
+            /* 1️⃣  le joueur part tout de suite */
+            player.isWaiting = false;
+
+            /* 2️⃣  les alliés partent en file indienne */
+            const BASE  = 40;   // délai mini en ms avant le 1ᵉʳ allié
+            const STEP  = 20;   // décalage fixe entre chaque allié
+            allies.forEach((a, idx) => {
+                const jitter = Math.random()*20;              // ± 20 ms d’aléa
+                setTimeout(() => a.isWaiting = false,
+                        BASE + idx*STEP + jitter);
+            });
+
+            chargeDelayActive = false;  // reset pour la partie suivante
+        }, 1000);
+        return;
+    }
+
+    /* ---------- 3) actions en cours de partie ---------- */
+    if (gameState === 'playing') {
+        if (e.code === 'Space' && !player.isCharging) {
+            player.isCharging = true;
+            player.chargeTime = 0;
+        }
+    }
+});
+
+
+window.addEventListener('keyup', e => {
+    keys[e.code] = false;
+    // Handle charged shot release on Space keyup
+    if (gameState === 'playing' && e.code === 'Space' && player.isCharging) {
+        // Fire charged shot ONLY if fully charged AND key is released
+        if (player.chargeTime >= PLAYER_CHARGE_DURATION) {
+            spawnBullet(player.x + player.w, player.centerY, BULLET_SPEED, 'ally', false); // Piercing shot
+        }
+        // Always stop charging on keyup
+        player.isCharging = false;
+        player.chargeTime = 0;
+    }
+});
+
+// 1️⃣ Création d’un canvas hors‑écran pour le bruit
+const noiseCanvas = document.createElement('canvas');
+noiseCanvas.width = noiseCanvas.height = 128;
+const nctx = noiseCanvas.getContext('2d');
+
+// 2️⃣ Génération du bruit gris clair
+const id = nctx.createImageData(128, 128);
+for (let i = 0; i < id.data.length; i += 4) {
+  const v = 40 + Math.random() * 25;  // nuance de gris
+  id.data[i] = id.data[i+1] = id.data[i+2] = v;
+  id.data[i+3] = 50;                  // alpha ~20%
+}
+nctx.putImageData(id, 0, 0);
+
+
+// --- Canvas Setup and Resize ---
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    // Adjust player Y position if canvas height changes significantly during game (optional)
+    // if (player) { player.y = Math.max(0, Math.min(canvas.height - player.h, player.y)); }
+}
+window.addEventListener('resize', resize);
+resize(); // Initial resize
+
+// --- Utility Functions ---
+function randomRange(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+/**
+ * Returns the current horizontal world scrolling speed based on player state.
+ * This speed applies to trenches, barbed wire, enemies, and non-crater explosions.
+ */
+function getCurrentWorldSpeed() {
+    // If player is alive, check their state
+    if (player && player.alive) {
+        if (player.isCharging) {
+            return WORLD_SPEED * SHOOT_SPEED_FACTOR;
+        }
+        if (player.isCrawling) {
+            return WORLD_SPEED * CRAWL_SPEED_FACTOR;
+        }
+    }
+    // Default speed if player is dead, not playing, or standing/not charging
+    return WORLD_SPEED;
+}
+
+
+/* ============================================================
+   OUTILS VISUELS – textures bruitées & formes irrégulières
+   ============================================================ */
+
+/**
+ * Génère un pattern bruité terreux (couleurs légèrement aléatoires)
+ *  size   : taille du tile (px)
+ *  base   : couleur de base (hex p.ex. '#4e3d31')
+ *  varPct : amplitude de variation (0‑100, % de différence)
+ */
+
+function spawnTrench(x) {
+  const h = canvas.height;
+
+  /* 1) paroi gauche ----------------------------------- */
+  const leftPts = [];
+  for (let y = 0; y <= h; y += 50) {
+    leftPts.push({ y, dx: (Math.random() - .5) * 10 });   // ← offset
+  }
+
+  /* 2) débris du sol ---------------------------------- */
+  const floorDebris = [];
+  for (let i = 0; i < 50; i++) {
+    floorDebris.push({
+      dx : randomRange(TRENCH_WIDTH*.45, TRENCH_WIDTH*.55), // ← offset
+      y  : randomRange(0, h),
+      w  : randomRange(1,3),
+      h  : randomRange(5,15)
+    });
+  }
+
+  /* 3) fissures droite -------------------------------- */
+  const cracks = [];
+  for (let i = 0; i < 5; i++) {
+    cracks.push( TRENCH_WIDTH*.6 + randomRange(0, TRENCH_WIDTH*.4) );  // ← offset
+  }
+
+  /* 4) planches --------------------------------------- */
+  const planks = [];
+  const plankCount = 6;
+  for (let i = 0; i < plankCount; i++) {
+    const y  = (i+1)*(h/(plankCount+1)) + randomRange(-5,5);
+    const ht = 8 + randomRange(-2,2);
+
+    const knots = [];
+    for (let k=0;k<3;k++)
+      knots.push({ dx: randomRange(0, TRENCH_WIDTH), dy: randomRange(0, ht) });
+
+    const nails = [];
+    for (let n=0;n<2;n++)
+      nails.push({ dx: randomRange(0, TRENCH_WIDTH), dy: ht/2 });
+
+    planks.push({ y, h: ht, knots, nails });
+  }
+
+  trenches.push({ x, counted:false, leftPts, floorDebris, cracks, planks });
+}
+
+
+
+function createSoilPattern(size, base, varPct = 15) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const cx = c.getContext('2d');
+    cx.fillStyle = base;
+    cx.fillRect(0, 0, size, size);
+
+    const imgData = cx.getImageData(0, 0, size, size);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+        // Variation aléatoire autour de la couleur de base
+        const v = (Math.random() - .5) * varPct;          // [-varPct/2 ; +varPct/2]
+        d[i  ] = d[i  ] + v;   // R
+        d[i+1] = d[i+1] + v;   // G
+        d[i+2] = d[i+2] + v;   // B
+    }
+    cx.putImageData(imgData, 0, 0);
+    return ctx.createPattern(c, 'repeat');
+}
+
+/**
+ * Trace un “cercle” irrégulier pour un crater
+ *  cx, cy  : centre
+ *  r       : rayon moyen
+ *  rough   : % d’irrégularité (0‑1)
+ *  points  : nombre de sommets
+ */
+function drawIrregularRing(cx_, cy_, r, rough = .25, points = 32) {
+    ctx.beginPath();
+    for (let i = 0; i <= points; i++) {
+        const a   = (i / points) * 2 * Math.PI;
+        const off = r * (1 + (Math.random() - .5) * rough);
+        const x   = cx_ + Math.cos(a) * off;
+        const y   = cy_ + Math.sin(a) * off;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+}
+
+// --- Dessin commun à TOUS les cratères ---------------------------------
+function drawCrater(ctx, c){
+    // 1) gradient radial
+    const grd = ctx.createRadialGradient(
+        c.x, c.y, c.radius*0.3,
+        c.x, c.y, c.radius
+    );
+    grd.addColorStop(0,   '#312b29');
+    grd.addColorStop(0.6, '#4b4543');
+    grd.addColorStop(1,   '#6a635f');
+
+    // 2) polygone irrégulier
+    ctx.beginPath();
+    c.pts.forEach((p,i)=>{
+        const px = p.x, py = p.y;
+        if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+    });
+    ctx.closePath();
+
+    // 3) remplissage + ombre interne + contour
+    ctx.fillStyle = grd;
+    ctx.fill();
+
+    ctx.save();
+    ctx.clip();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.shadowColor   = 'rgba(0,0,0,0.6)';
+    ctx.shadowBlur    = 20;
+    ctx.shadowOffsetY = 8;
+    ctx.fillRect(c.x - c.radius, c.y - c.radius, c.radius*2, c.radius*2);
+    ctx.restore();
+
+    ctx.strokeStyle = 'rgba(110,100,90,0.8)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+}
+
+function makeCrater(x, y, radius) {
+    const rough  = 0.35;      // irrégularité
+    const N      = 32;        // nombre de sommets
+    const pts = [];
+    for (let i = 0; i < N; i++) {
+        const a   = (i / N) * Math.PI * 2;
+        const off = radius * (1 + (Math.random() - .5) * rough);
+        pts.push({ x: x + Math.cos(a) * off,
+                   y: y + Math.sin(a) * off });
+    }
+    return { x, y, radius, pts };
+}
+
+
+/**
+ * Calculates the distance between two points.
+ */
+function getDistance(x1, y1, x2, y2) {
+    const dx = x1 - x2;
+    const dy = y1 - y2;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+
+// --- Sound Manager ---
+const soundManager = {
+    // Single sounds
+    bgMusic: document.getElementById('bgMusic'),
+    startWhistle: document.getElementById('startWhistle'),
+    trenchCapture: document.getElementById('trenchCapture'),
+
+    // Pooled sounds (NodeLists from HTML)
+    explosionPool: document.querySelectorAll('.explosionSound'),
+    shotPool: document.querySelectorAll('.shotSound'),
+    deathPool: document.querySelectorAll('.deathSound'),
+    whizPool: document.querySelectorAll('.whizSound'),
+    incomingPool: document.querySelectorAll('.incomingSound'),
+
+    // Max audible distance for volume calculation (adjust based on your game scale)
+    maxAudibleDistance: 1000, // Sounds beyond this distance will be silent
+
+    init: function() {
+        // Set initial volume for background music (optional)
+        if (this.bgMusic) this.bgMusic.volume = 1; // Lower volume
+    },
+
+    // Get an available audio element from a pool (one that is paused or ended)
+    getAvailableSound: function(pool) {
+        for (let i = 0; i < pool.length; i++) {
+            if (pool[i].paused || pool[i].ended) {
+                return pool[i];
+            }
+        }
+        // Fallback: return null if no available element
+        // console.warn(`Sound pool exhausted!`); // Uncomment for debugging pool size
+        return null;
+    },
+
+    // Play a sound with optional positional volume
+    playSound: function(soundName, x = null, y = null) {
+        let element = null;
+        let pool = null;
+
+        // Determine if it's a pooled sound or single sound
+        if (soundName === 'explosion') { pool = this.explosionPool; element = this.getAvailableSound(pool); }
+        else if (soundName === 'shot') { pool = this.shotPool; element = this.getAvailableSound(pool); }
+        else if (soundName === 'death') { pool = this.deathPool; element = this.getAvailableSound(pool); }
+        else if (soundName === 'whiz') { pool = this.whizPool; element = this.getAvailableSound(pool); }
+        else if (soundName === 'incoming') { pool = this.incomingPool; element = this.getAvailableSound(pool); }
+        else { // Single sounds
+            element = this[soundName];
+        }
+
+        if (element) {
+            // Stop and reset if already playing (important for rapid sounds)
+            element.pause();
+            element.currentTime = 0;
+
+            // Adjust volume based on distance if coordinates are provided and player is alive
+            if (x !== null && y !== null && player && player.alive) {
+                const distance = getDistance(player.centerX, player.centerY, x, y);
+                // Volume decreases linearly with distance, clamped between 0 and 1
+                let volume = 1 - distance / this.maxAudibleDistance;
+                volume = Math.max(0, Math.min(1, volume)); // Clamp between 0 and 1
+                element.volume = volume;
+            } else {
+                // Default volume for non-positional sounds or if player is dead
+                element.volume = 1.0; // Or a specific default
+                if (soundName === 'bgMusic') element.volume = 0.4; // Keep background music lower
+            }
+
+            // Play the sound
+            element.play().catch(e => {
+                // Handle potential autoplay errors (e.g., user hasn't interacted yet)
+                // console.warn(`Autoplay prevented for ${soundName}:`, e); // Uncomment for debugging
+            });
+        }
+    },
+
+    // Stop background music
+    stopBgMusic: function() {
+        if (this.bgMusic) {
+            this.bgMusic.pause();
+            this.bgMusic.currentTime = 0;
+        }
+    }
+};
+
+// Initialize the sound manager
+soundManager.init();
+
+
+// --- Entity Classes ---
+class Entity {
+    constructor(x, y, w, h) {
+        this.x = x;
+        this.y = y;
+        this.w = w;
+        this.h = h;
+        this.alive = true;
+    }
+    get right() { return this.x + this.w; }
+    get bottom() { return this.y + this.h; }
+    get centerX() { return this.x + this.w / 2; }
+    get centerY() { return this.y + this.h / 2; }
+    intersects(o) {
+        return this.x < o.right && this.right > o.x && this.y < o.bottom && this.bottom > o.y;
+    }
+    // Placeholder methods
+    update(dt) {}
+    // Base draw method - can be overridden by subclasses
+    draw() {
+        // Default drawing (e.g., hitbox for debugging)
+        if (DEBUG_DRAW_HITBOXES) {
+             ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'; // Semi-transparent white for generic entities
+             ctx.fillRect(this.x, this.y, this.w, this.h);
+        }
+    }
+}
+
+class Player extends Entity {
+    constructor() {
+        super(PLAYER_X, canvas.height / 2 - PLAYER_HEIGHT_STANDING / 2, PLAYER_WIDTH, PLAYER_HEIGHT_STANDING);
+        this.vy = 0;
+        this.isCrawling = false;
+        this.isCharging = false;
+        this.isWaiting = false;
+        this.chargeTime = 0;
+        this.shootCooldown = 0; // Cooldown for regular shot ('F' key)
+
+        this.runFrames       = [
+            spriteMap.player_running1,
+            spriteMap.player_running2
+            ];
+        this.currentRunFrame = 0;      // index de la frame actuelle
+        this.runTimer        = 0;      // compteur en ms
+        this.runFrameDuration= 300;    // durée de chaque frame (ajuste à 100–200 ms)
+    }
+
+    update(dt) {
+        const dtSec = dt / 1000;
+
+        // Decrement cooldowns
+        if (this.shootCooldown > 0) this.shootCooldown -= dt;
+
+        // Handle charging state
+        if (this.isCharging) {
+             this.chargeTime += dt;
+             // Cap charge time at max duration
+             if (this.chargeTime > PLAYER_CHARGE_DURATION) {
+                 this.chargeTime = PLAYER_CHARGE_DURATION;
+             }
+             // Vertical movement is still allowed while charging
+             this.vy = 0;
+             if (keys['ArrowUp'] || keys['KeyW']) this.vy = -PLAYER_SPEED_Y;
+             if (keys['ArrowDown'] || keys['KeyS']) this.vy = PLAYER_SPEED_Y;
+
+             // Crawling state is independent of charging, controlled by Left/A
+             this.isCrawling = !!(keys['ArrowLeft'] || keys['KeyA']);
+
+        } else {
+            // Handle vertical movement when not charging
+            this.vy = 0;
+            if (keys['ArrowUp'] || keys['KeyW']) this.vy = -PLAYER_SPEED_Y;
+            if (keys['ArrowDown'] || keys['KeyS']) this.vy = PLAYER_SPEED_Y;
+
+            // Handle crawling when not charging
+            this.isCrawling = !!(keys['ArrowLeft'] || keys['KeyA']);
+        }
+
+        // Apply vertical movement
+        this.y += this.vy * dtSec;
+
+        // Keep player within canvas bounds vertically
+        const currentHeight = this.isCrawling ? PLAYER_HEIGHT_CRAWLING : PLAYER_HEIGHT_STANDING;
+        if (this.y < 0) this.y = 0;
+        if (this.y + currentHeight > canvas.height) this.y = canvas.height - currentHeight;
+
+        // Ajuste largeur & hauteur en fonction de l’état crawling
+        if (this.isCrawling) {
+            this.w = PLAYER_WIDTH_CRAWLING;
+            this.h = PLAYER_HEIGHT_CRAWLING;
+            // Recentre horizontalement la hitbox plus large
+            this.x = PLAYER_X - (PLAYER_WIDTH_CRAWLING - PLAYER_WIDTH) / 2;
+        } else {
+            this.w = PLAYER_WIDTH;
+            this.h = PLAYER_HEIGHT_STANDING;
+            this.x = PLAYER_X;
+        }
+
+
+        if (!this.isCrawling) {
+            this.runTimer += dt;
+            if (this.runTimer >= this.runFrameDuration) {
+            this.runTimer -= this.runFrameDuration
+            this.currentRunFrame = (this.currentRunFrame + 1) % this.runFrames.length;
+            }
+        } else {
+            // on réinitialise l’anim quand on passe en crawl
+            this.currentRunFrame = 0;
+            this.runTimer        = 0;
+        }
+    }
+
+    shootRegular() {
+        // Fires a non-piercing bullet
+        spawnBullet(this.x + this.w, this.centerY, BULLET_SPEED, 'ally', false);
+    }
+
+    draw() {
+        // Draw hitbox for debugging
+        if (DEBUG_DRAW_HITBOXES) {
+            ctx.fillStyle = 'rgba(0, 0, 255, 0.5)'; // Semi-transparent blue for player hitbox
+            ctx.fillRect(this.x, this.y, this.w, this.h);
+        }
+
+        // Draw sprite if loaded
+        if (this.isWaiting) {
+            // Pose “chargement” sans barre ni logique
+            const sprite = spriteMap.player_firing;
+            ctx.drawImage(
+            spriteSheetImage,
+            sprite.sx, sprite.sy, sprite.sw, sprite.sh,
+            this.x, this.y, this.w, this.h
+            );
+            return;  // on sort, pas d’autre dessin
+        }
+
+        if (spritesLoaded) {
+            let sprite;
+            if (this.isCrawling) {
+                // en crawl, QUE le sprite de crawl, même si on charge
+                sprite = spriteMap.player_crawling;
+            } else if (this.isCharging) {
+                // debout et en charge : sprite firing
+                sprite = spriteMap.player_firing;
+            } else {
+                // course : alternance running1/running2
+                sprite = this.runFrames[this.currentRunFrame];
+            }
+
+            ctx.drawImage(
+                spriteSheetImage,
+                sprite.sx, sprite.sy, sprite.sw, sprite.sh,
+                this.x, this.y,
+                this.w, this.h
+            );
+        } else if (!DEBUG_DRAW_HITBOXES) {
+             // Fallback if sprites not loaded and not debugging hitboxes
+             ctx.fillStyle = 'blue'; // Solid blue fallback if no sprites and no debug
+             ctx.fillRect(this.x, this.y, this.w, this.h);
+        }
+
+
+        // Visual indicator for charged shot (drawn on top of sprite)
+        /*if (this.isCharging) {
+             const chargeProgress = Math.min(1, this.chargeTime / PLAYER_CHARGE_DURATION);
+             // Draw charge bar
+             const barWidth = this.w * 1.5;
+             const barHeight = 5;
+             const barX = this.centerX - barWidth / 2;
+             const barY = this.y - barHeight - 5;
+             ctx.fillStyle = '#333'; // Background
+             ctx.fillRect(barX, barY, barWidth, barHeight);
+             ctx.fillStyle = '#0f0'; // Progress
+             ctx.fillRect(barX, barY, barWidth * chargeProgress, barHeight);
+             ctx.strokeStyle = '#fff'; // Border
+             ctx.strokeRect(barX, barY, barWidth, barHeight);
+        }*/
+    }
+}
+
+// Base class for Ally and Enemy soldiers
+class Soldier extends Entity {
+    constructor(x, y, color) { // Color is just for fallback/debug
+        super(x, y, PLAYER_WIDTH, PLAYER_HEIGHT_STANDING); // Start standing
+        this.color = color; // For fallback/debug
+        this.vy = 0;
+        this.isCrawling = false;
+        this.isCharging = false; // Add charging state for soldiers
+        this.isWaiting = false;
+        this.chargeTime = 0;
+        this.shootCooldown = 0; // Needs to be initialized in derived classes
+        this.timeSinceLastRandomMove = 0; // For random vertical movement
+    }
+
+    // Soldier base class doesn't draw a specific sprite, derived classes will.
+    // It can draw the hitbox if debugging is on.
+    draw() {
+         // Draw hitbox for debugging
+         if (DEBUG_DRAW_HITBOXES) {
+             ctx.fillStyle = `rgba(${this.color === 'green' ? '0, 255, 0' : '255, 0, 0'}, 0.5)`; // Semi-transparent green/red
+             ctx.fillRect(this.x, this.y, this.w, this.h);
+         }
+         // Derived classes will add sprite drawing here
+    }
+}
+
+class Ally extends Soldier {
+    constructor(x, y) {
+        const vitesseallié = 1 + randomRange(-ALLY_SPEED_VARIATION * 100, ALLY_SPEED_VARIATION * 100) / 100;
+
+        super(x, y, 'green'); // Pass color for debug/fallback
+        this.shootCooldown = randomRange(10000, 20000);
+        this.randomVy = 0; // Current random vertical speed
+        this.nextRandomMoveTime = 0; // When to pick new randomVy
+        // Base speed relative to the world, with variation
+        this.baseSpeedFactor = vitesseallié;
+        this.crawlTimer = 0; // Timer for random crawling
+        this.stayCrawlingTimer = 0; // Timer for barbed wire crawling
+
+        this.runFrames       = [
+            spriteMap.ally_running1,
+            spriteMap.ally_running2
+            ];
+        this.currentRunFrame = randomRange(0,1);      // index de la frame actuelle
+        this.runTimer        = 0;      // compteur en ms
+        this.runFrameDuration= 300 * vitesseallié;    // durée de chaque frame (ajuste à 100–200 ms)
+    }
+
+    update(dt) {
+        /* NE RIEN FAIRE tant que l’allié attend le coup de sifflet */
+
+        /* Tant qu’on attend le coup de sifflet
+        → on suit simplement le scroll du monde                      */
+        if (this.isWaiting) {
+            this.x -= getCurrentWorldSpeed() * dt / 1000;  // même déplacement que le décor
+            return;                                        // rien d’autre
+        }
+        
+        const dtSec = dt / 1000;
+        const currentWorldSpeed = getCurrentWorldSpeed();
+
+
+
+        // --- Horizontal Movement ---
+        // Ally's base speed relative to the world (with variation)
+        const allyWorldBaseSpeed = WORLD_SPEED * this.baseSpeedFactor;
+        // Ally's effective speed factor relative to the world (reduced if crawling OR charging)
+        const allyEffectiveFactor = (this.isCrawling || this.isCharging) ? CRAWL_SPEED_FACTOR : 1;
+        // Ally's effective speed relative to the world
+        const allyWorldEffectiveSpeed = allyWorldBaseSpeed * allyEffectiveFactor;
+        // Ally's speed relative to the screen
+        const effectiveMoveX = allyWorldEffectiveSpeed - currentWorldSpeed;
+        this.x += effectiveMoveX * dtSec;
+
+
+        // --- Crawling Logic (Barbed Wire & Crater) ---
+        // Barbed wire detection
+        const barbedDetected = barbedWires.some(b =>
+            b.alive &&
+            // Check detection zone around the ally
+            b.x < this.x + ALLY_BARBED_WIRE_DETECTION_DIST && b.right > this.x - ALLY_BARBED_WIRE_DETECTION_DIST &&
+            // Check vertical alignment
+            b.y < this.bottom && b.bottom > this.y
+        );
+
+        if (barbedDetected) {
+            this.stayCrawlingTimer = 800; // stay down for 800ms after detection
+        }
+
+        // Crater detection and random crawl initiation
+        let nearCrater = false;
+        for (const ex of explosions) {
+            if (ex.alive && ex.phase === 'crater') {
+                const dCrater = Math.hypot(ex.x - this.centerX, ex.y - this.centerY);
+                if (dCrater < EXPLOSION_RADIUS + ALLY_CRATER_DETECTION_RADIUS) { // Check distance to crater center + radius
+                    nearCrater = true;
+                    break; // Found one, no need to check others
+                }
+            }
+        }
+
+        // Animation de course si l’allié ne crawl pas et ne charge pas
+        if (!this.isCrawling && !this.isCharging) {
+        this.runTimer += dt;
+        if (this.runTimer >= this.runFrameDuration) {
+            this.runTimer    -= this.runFrameDuration;
+            this.currentRunFrame = (this.currentRunFrame + 1) % this.runFrames.length;
+        }
+        } else {
+        // reset quand on passe en crawl ou charge
+        this.currentRunFrame = 0;
+        this.runTimer        = 0;
+        }
+
+        if (nearCrater && this.crawlTimer <= 0 && this.stayCrawlingTimer <= 0 && !this.isCharging) { // Don't start random crawl if charging
+            // Random chance to start crawling when near a crater and not already crawling/forced down/charging
+            if (Math.random() < ALLY_CRAWL_CHANCE_IN_CRATER) {
+                this.crawlTimer = ALLY_RANDOM_CRAWL_DURATION;
+            }
+        }
+
+        // Decrement timers
+        if (this.stayCrawlingTimer > 0) this.stayCrawlingTimer -= dt;
+        if (this.crawlTimer > 0) this.crawlTimer -= dt;
+
+        // Determine crawling state: forced by wire, random
+        this.isCrawling = this.stayCrawlingTimer > 0 || this.crawlTimer > 0;
+
+        /// Ajuste largeur & hauteur en fonction de l’état crawling
+        const oldWidth = this.w;
+        const newWidth = this.isCrawling ? PLAYER_WIDTH_CRAWLING : PLAYER_WIDTH;
+        this.w = newWidth;
+        this.h = this.isCrawling ? PLAYER_HEIGHT_CRAWLING : PLAYER_HEIGHT_STANDING;
+        // Décale pour garder l’allié centré horizontalement
+        this.x -= (newWidth - oldWidth) / 2;
+
+        // --- Shooting Logic (Seulement tirs chargés) ---
+        if (this.isCharging) {
+            // Si déjà en charge, on incrémente le timer
+            this.chargeTime += dt;
+            if (this.chargeTime >= ALLY_CHARGE_DURATION) {
+                // Dès que la charge est complète, on tire un tir piercing
+                spawnBullet(this.x + this.w, this.centerY, BULLET_SPEED, 'ally', false);
+                // On réinitialise l’état de charge
+                this.isCharging = false;
+                this.chargeTime  = 0;
+                // On applique un cooldown prolongé avant la prochaine charge
+                this.shootCooldown = randomRange(
+                ALLY_SHOOT_COOLDOWN_MIN,
+                ALLY_SHOOT_COOLDOWN_MAX
+                );
+            }
+        } else {
+            // Pas en charge : on décrémente le cooldown
+            this.shootCooldown -= dt;
+            if (this.shootCooldown <= 0) {
+                // Quand le cooldown est à zéro, on repart en charge directement
+                this.isCharging = true;
+                this.chargeTime  = 0;
+                // Le cooldown sera remis après le tir chargé
+            }
+        }
+
+        // --- Vertical Movement ---
+        // Apply random vertical movement only when standing AND not charging
+        if (!this.isCrawling && !this.isCharging) {
+             this.timeSinceLastRandomMove += dt;
+             if (this.timeSinceLastRandomMove >= this.nextRandomMoveTime) {
+                 this.randomVy = randomRange(-ALLY_VERTICAL_SPEED, ALLY_VERTICAL_SPEED);
+                 this.nextRandomMoveTime = randomRange(ALLY_RANDOM_MOVE_INTERVAL * 0.8, ALLY_RANDOM_MOVE_INTERVAL * 1.2);
+                 this.timeSinceLastRandomMove = 0;
+             }
+             this.y += this.randomVy * dtSec;
+        } else {
+            // Stop random vertical movement while crawling or charging
+            this.randomVy = 0;
+        }
+
+        // Keep allies within canvas bounds vertically (adjusting for current height)
+        const currentHeight = this.isCrawling ? PLAYER_HEIGHT_CRAWLING : PLAYER_HEIGHT_STANDING;
+        if (this.y < 0) { this.y = 0; this.randomVy = Math.abs(this.randomVy); } // Bounce off top
+        if (this.y + currentHeight > canvas.height) {
+            this.y = canvas.height - currentHeight;
+            this.randomVy = -Math.abs(this.randomVy); // Bounce off bottom
+        }
+    }
+
+    draw() {
+        // debug hitbox
+        if (DEBUG_DRAW_HITBOXES) {
+            ctx.fillStyle = 'rgba(0,255,0,0.5)';
+            ctx.fillRect(this.x,this.y,this.w,this.h);
+        }
+
+        if (this.isWaiting) {
+            const sprite = spriteMap.ally_firing || spriteMap.player_firing;
+            ctx.drawImage(
+            spriteSheetImage,
+            sprite.sx, sprite.sy, sprite.sw, sprite.sh,
+            this.x, this.y, this.w, this.h
+            );
+            return;
+        }
+
+        if (spritesLoaded) {
+            let sprite;
+            if (this.isCrawling) {
+                // Priorité au sprite de crawl, même si on charge
+                sprite = spriteMap.ally_crawling;
+            }
+            else if (this.isCharging) {
+                // Debout et en charge : sprite ally_firing (si défini)
+                sprite = spriteMap.ally_firing;
+            }
+            else {
+                // Course : alternance running1/running2
+                sprite = this.runFrames[this.currentRunFrame];
+            }
+
+            ctx.drawImage(
+                spriteSheetImage,
+                sprite.sx, sprite.sy, sprite.sw, sprite.sh,
+                this.x, this.y, this.w, this.h
+            );
+        } else if (!DEBUG_DRAW_HITBOXES) {
+            // fallback
+            ctx.fillStyle = this.color;
+            ctx.fillRect(this.x,this.y,this.w,this.h);
+        }
+
+    }
+}
+
+class Enemy extends Soldier {
+    constructor(x, y) {
+        super(x, y, 'red'); // Pass color for debug/fallback
+        this.shootCooldown = randomRange(ENEMY_SHOOT_COOLDOWN_MIN, ENEMY_SHOOT_COOLDOWN_MAX);
+        // Enemies do not crawl or charge (based on original code)
+        this.isCrawling = false;
+        this.isCharging = false;
+    }
+
+    update(dt) {
+        const dtSec = dt / 1000;
+        // Enemies move left relative to the screen at the current world speed
+        this.x -= getCurrentWorldSpeed() * dtSec;
+
+        // Gestion du tir
+        this.shootCooldown -= dt;
+        if (this.shootCooldown <= 0) {
+            // Find nearest target (player or ally) within vertical alignment threshold
+            let target = null;
+            let minDistSq = Infinity;
+
+            // Check player
+            if (player.alive && Math.abs(player.centerY - this.centerY) < ENEMY_SHOOT_ALIGNMENT_THRESHOLD) {
+                 const dx = player.centerX - this.centerX;
+                 const dy = player.centerY - this.centerY;
+                 minDistSq = dx*dx + dy*dy;
+                 target = player;
+            }
+
+            // Check allies
+            allies.forEach(ally => {
+                if (ally.alive && Math.abs(ally.centerY - this.centerY) < ENEMY_SHOOT_ALIGNMENT_THRESHOLD) {
+                    const dx = ally.centerX - this.centerX;
+                    const dy = ally.centerY - this.centerY;
+                    const distSq = dx*dx + dy*dy;
+                    if (distSq < minDistSq) {
+                        minDistSq = distSq;
+                        target = ally;
+                    }
+                }
+            });
+
+
+            if (target) {
+                // Simple straight shot towards target's Y, from enemy's X
+                spawnBullet(this.x, this.centerY, -BULLET_SPEED, 'enemy');
+            } else {
+                 // If no target, maybe don't shoot? Or shoot straight? Let's not shoot if no target.
+            }
+            this.shootCooldown = randomRange(ENEMY_SHOOT_COOLDOWN_MIN, ENEMY_SHOOT_COOLDOWN_MAX);
+        }
+    }
+
+    draw() {
+        // Call base draw for hitbox (if enabled)
+        super.draw();
+
+        // Draw sprite if loaded
+        if (spritesLoaded) {
+            const spriteKey = 'enemy_standing'; // Enemies only have standing sprite
+            const sprite = spriteMap[spriteKey];
+            if (sprite) {
+                 // Draw the sprite scaled to the entity's current size (this.w, this.h)
+                 ctx.drawImage(spriteSheetImage,
+                               sprite.sx, sprite.sy, sprite.sw, sprite.sh,
+                               this.x, this.y, this.w, this.h);
+            } else {
+                 console.warn(`Sprite key "${spriteKey}" not found in spriteMap.`);
+            }
+        } else if (!DEBUG_DRAW_HITBOXES) {
+             // Fallback if sprites not loaded and not debugging hitboxes
+             ctx.fillStyle = this.color; // Solid color fallback
+             ctx.fillRect(this.x, this.y, this.w, this.h);
+        }
+    }
+}
+
+class BarbedWire extends Entity {
+    constructor(x, y) {
+        super(x, y, BARBED_WIDTH, BARBED_HEIGHT + randomRange(-10, 20)); // Height varies
+        this.color = 'gray'; // For drawing fallback/debug
+    }
+
+    update(dt) {
+        // Move with the terrain at the current world speed
+        this.x -= getCurrentWorldSpeed() * dt / 1000;
+    }
+
+    draw() {
+        // Draw hitbox for debugging
+        if (DEBUG_DRAW_HITBOXES) {
+            ctx.fillStyle = 'rgba(128, 128, 128, 0.5)'; // Semi-transparent gray
+            ctx.fillRect(this.x, this.y, this.w, this.h);
+        }
+
+        // Draw sprite if loaded
+        if (spritesLoaded) {
+            const spriteKey = 'barbed_wire';
+            const sprite = spriteMap[spriteKey];
+            if (sprite) {
+                 // Draw the sprite scaled to the entity's current size (this.w, this.h)
+                 // NOTE: Scaling the large 872x421 sprite into a 20x(variable height) box will cause extreme distortion.
+                 // You might need a different sprite or drawing logic (e.g., tiling) for barbed wire.
+                 ctx.drawImage(spriteSheetImage,
+                               sprite.sx, sprite.sy, sprite.sw, sprite.sh,
+                               this.x, this.y, this.w, this.h);
+            } else {
+                 console.warn(`Sprite key "${spriteKey}" not found in spriteMap.`);
+            }
+        } else if (!DEBUG_DRAW_HITBOXES) {
+             // Fallback if sprites not loaded and not debugging hitboxes
+             ctx.fillStyle = this.color; // Solid color fallback
+             ctx.fillRect(this.x, this.y, this.w, this.h);
+        }
+    }
+}
+
+class Bullet extends Entity {
+    constructor(x = 0, y = 0, vx = 0, origin = '', pierce = false) {
+        super(x, y, BULLET_WIDTH, BULLET_HEIGHT);
+        this.vx = vx;
+        this.origin = origin; // 'ally' or 'enemy'
+        this.pierce = pierce; // True for charged shot
+        this.alive = true; // Used by pool
+        this.whizzed = false; // Flag to prevent multiple whiz sounds per bullet
+    }
+
+    // Method to re-initialize for pooling
+    init(x, y, vx, origin, pierce = false) {
+        this.x = x;
+        this.y = y;
+        this.w = BULLET_WIDTH;
+        this.h = BULLET_HEIGHT;
+        this.vx = vx;
+        this.origin = origin;
+        this.pierce = pierce;
+        this.alive = true; // Mark as active
+        this.whizzed = false; // Reset flag
+        return this; // Allow chaining
+    }
+
+    update(dt) {
+        const dtSec = dt / 1000;
+        this.x += this.vx * dtSec;
+
+        // Mark for removal if off-screen
+        if (this.x > canvas.width || this.x + this.w < 0) {
+            this.alive = false;
+        }
+    }
+
+    draw() {
+        // Bullets don't use sprites in this setup, keep simple drawing
+        if (DEBUG_DRAW_HITBOXES) {
+             ctx.fillStyle = this.origin === 'ally' ? 'rgba(255, 255, 0, 0.5)' : 'rgba(255, 165, 0, 0.5)'; // Semi-transparent yellow/orange
+             ctx.fillRect(this.x, this.y, this.w, this.h);
+        } else {
+             ctx.fillStyle = this.origin === 'ally' ? 'yellow' : 'orange';
+             ctx.fillRect(this.x, this.y, this.w, this.h);
+        }
+    }
+}
+
+class Explosion {
+    constructor(x = 0, y = 0) {
+        this.x = x;
+        this.y = y;
+        this.phase = 'shadow'; // 'shadow', 'blast', 'crater'
+        this.timer = 0; // Timer within current phase
+        this.radius = 10 + randomRange(0,2); // Dynamic radius for shadow/blast effect
+        this.alive = true; // Used by pool
+        this.craterDuration = 0; // How long the crater has been visible
+        this.pts = null;
+    }
+
+    // Method to re-initialize for pooling
+    init(x, y) {
+        this.x = x;
+        this.y = y;
+        this.phase = 'shadow';
+        this.timer = 0;
+        this.radius = 10 + randomRange(0,2);
+        this.alive = true; // Mark as active
+        this.craterDuration = 0;
+
+        // --- SOUND: Incoming Shell (if close to player) ---
+        if (player && player.alive) {
+            const distance = getDistance(player.centerX, player.centerY, this.x, this.y);
+            const incomingThreshold = 600; // Distance threshold for hearing incoming shell
+            if (distance < incomingThreshold) {
+                 soundManager.playSound('incoming', this.x, this.y);
+            }
+        }
+
+        return this; // Allow chaining
+    }
+
+    update(dt) {
+        const dtSec = dt / 1000;
+        this.timer += dt;
+
+        // défilement (une seule fois) :
+        const dx = getCurrentWorldSpeed()*dtSec;
+        this.x -= dx;
+        if(this.pts) this.pts.forEach(pt => pt.x -= dx);
+
+        // passage blast → crater
+        if(this.phase==='blast' && this.timer>=EXPLOSION_BLAST_DURATION){
+            this.phase = 'crater';
+            this.timer = 0;
+            this.craterDuration = 0;
+
+            // ⬇️ AJOUT : on génère la géométrie irrégulière
+            const rough  = 0.35;      // même « rugosité » que décoratif
+            const N      = 32;        // nombre de sommets
+            this.pts = [];            // on remplit le tableau
+            for (let i = 0; i < N; i++){
+                const a   = (i / N) * Math.PI * 2;              // angle
+                const off = this.radius * (1 + (Math.random() - .5) * rough);
+                this.pts.push({
+                    x: this.x + Math.cos(a) * off,
+                    y: this.y + Math.sin(a) * off
+                });
+            }
+        }
+
+        if (this.phase === 'shadow') {
+            // Shadow grows
+            this.radius = 5 + (EXPLOSION_RADIUS - 45) * (this.timer / EXPLOSION_SHADOW_DURATION);
+            if (this.timer >= EXPLOSION_SHADOW_DURATION) {
+                this.phase = 'blast';
+                this.timer = 0;
+                this.radius = EXPLOSION_RADIUS; // Blast starts at max radius
+                applyBlast(this.x, this.y); // Apply damage/destruction at the center
+                // --- SOUND: Explosion Blast ---
+                soundManager.playSound('explosion', this.x, this.y);
+            }
+        } else if (this.phase === 'blast') {
+            // Blast effect (could shrink or change alpha/color over duration)
+            // For simplicity, let's keep radius constant during blast, just time the phase
+             // this.radius = EXPLOSION_RADIUS * (1 - (this.timer / EXPLOSION_BLAST_DURATION)); // Optional shrinking blast visual
+            if (this.timer >= EXPLOSION_BLAST_DURATION) {
+                this.phase = 'crater';
+                this.timer = 0; // Reset timer for crater duration tracking if needed, or use a separate craterDuration
+                 this.craterDuration = 0; // Start crater duration timer
+            }
+        } else if (this.phase === 'crater') {
+            // Crater stays visible and scrolls off-screen
+            this.craterDuration += dt; // Track how long it's been a crater
+        }
+
+        // Mark for removal/pooling if crater is off-screen for a duration
+        // Check if the *left edge* of the crater is off-screen left
+        if (this.phase === 'crater' && this.x + EXPLOSION_RADIUS < 0 && this.craterDuration >= EXPLOSION_CRATER_DURATION) {
+            this.alive = false;
+        }
+    }
+
+    draw() {
+        // 1) Phases « shadow » & « blast » inchangées
+        if (this.phase === 'shadow' || this.phase === 'blast'){ 
+            const color = this.phase === 'shadow'
+                         ? 'rgba(50,50,50,0.8)'
+                         : 'rgba(255,150,0,0.8)';
+            const r     = this.phase === 'shadow' ? this.radius : EXPLOSION_RADIUS;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(this.x,this.y,r,0,Math.PI*2);
+            ctx.fill();
+            return;               // ⬅️ on sort, rien d’autre à faire
+        }
+
+        // 2) Phase « crater » : même rendu que les décoratifs
+        drawCrater(ctx, this);    // ←  (on crée cette fonction à l’étape 3)
+    }
+}
+
+// --- Object Pooling Functions ---
+function getBullet() {
+    if (bulletPool.length > 0) {
+        return bulletPool.pop();
+    } else {
+        // Pool is empty, create a new one (shouldn't happen often if pool size is adequate)
+        return new Bullet();
+    }
+}
+
+function returnBullet(bullet) {
+    bullet.alive = false; // Mark as inactive
+    bulletPool.push(bullet);
+}
+
+function getExplosion() {
+     if (explosionPool.length > 0) {
+         return explosionPool.pop();
+     } else {
+         // Pool is empty, create a new one
+         return new Explosion();
+     }
+}
+
+function returnExplosion(explosion) {
+     explosion.alive = false; // Mark as inactive
+     explosion.pts   = null;   // libère la géométrie
+     explosionPool.push(explosion);
+}
+
+// --- Game Logic Functions ---
+function startGame() {
+    if (gameState !== 'ready') return;
+    resetGame();
+}
+
+function resetGame() {
+    score = 0;
+    chargeDelayActive = false;   // ← remise à zéro
+    updateScore();
+
+    // Clear all entity lists
+    trenches = [];
+    barbedWires = [];
+    bullets = [];
+    allies = [];
+    enemies = [];
+    explosions = [];
+
+    // Clear and repopulate pools
+    bulletPool = [];
+    for(let i=0; i<BULLET_POOL_SIZE; i++) bulletPool.push(new Bullet());
+    explosionPool = [];
+    for(let i=0; i<EXPLOSION_POOL_SIZE; i++) explosionPool.push(new Explosion());
+
+    // — Tranchée initiale à gauche (visible et déjà “comptée” pour ne pas rapporter de points) —
+    spawnTrench( 68 );
+    trenches[0].counted = true;
+
+        // ── NOUVEAU ──
+    // Génération aléatoire de cratères décoratifs
+    decorativeCraters = [];
+    const craterCount = randomRange(15, 30);        // Nombre de cratères
+    for (let i = 0; i < craterCount; i++) {
+        decorativeCraters.push(
+        makeCrater(
+            randomRange(180, canvas.width),
+            randomRange(0, canvas.height),
+            randomRange(20, 60)
+        )
+    );
+    }
+    // Initialise le timer pour les cratères décoratifs pendant le jeu
+    nextDecorativeCraterTime = randomRange(
+        DECORATIVE_CRATER_SPAWN_MIN,
+        DECORATIVE_CRATER_SPAWN_MAX
+    );
+    // ──────────────
+
+
+    // Create player
+    player = new Player();
+
+    // Initial allies
+    for (let i = 0; i < ALLY_COUNT_INITIAL; i++) {
+    allies.push(new Ally(player.x + randomRange(-5,4), (i + 1) * (canvas.height / (ALLY_COUNT_INITIAL + 1)) + randomRange(-5,5)));
+    }
+
+    allies.forEach(a => a.isWaiting = true);
+    player.isWaiting = true;
+
+    // Reset trench and explosion spawning timers
+    nextTrenchX = canvas.width + randomRange(TRENCH_MIN_DIST, TRENCH_MAX_DIST); // First trench appears off-screen
+    timeSinceLastExplosion = 0;
+    nextExplosionTime = randomRange(EXPLOSION_SPAWN_INTERVAL_MIN, EXPLOSION_SPAWN_INTERVAL_MAX);
+
+
+  
+    // Passage à l'état d'attente de charge
+    gameState = 'waitingCharge';
+    document.getElementById('message').innerText = 'Appuyer sur → pour lancer la charge';
+    document.getElementById('message').style.display = 'block';
+
+    // Lance immédiatement la musique de fond en boucle
+    soundManager.playSound('bgMusic');
+
+    // On démarre la boucle
+    lastTime = performance.now();
+    requestAnimationFrame(gameLoop);
+
+
+}
+
+function gameOver() {
+    gameState = 'gameover';
+    document.getElementById('message').innerText = 'Tu es mort... ESPACE pour rejouer';
+    document.getElementById('message').style.display = 'block';
+    // --- SOUND: Stop Background Music ---
+    soundManager.stopBgMusic();
+}
+
+function updateScore() {
+    document.getElementById('score').innerText = score;
+}
+
+function spawnBullet(x, y, vx, origin, pierce = false) {
+    const bullet = getBullet().init(x, y, vx, origin, pierce);
+    bullets.push(bullet);
+    // --- SOUND: Shot ---
+    // Play sound from the origin's position (x, y)
+    soundManager.playSound('shot', x, y);
+}
+
+function spawnExplosion(x, y) {
+    // Explosion init method now handles playing the 'incoming' sound if close
+    const explosion = getExplosion().init(x, y);
+    explosions.push(explosion);
+}
+
+function applyBlast(x, y) {
+    // Check player collision
+    const dPlayer = getDistance(player.centerX, player.centerY, x, y);
+    if (player.alive && dPlayer < EXPLOSION_RADIUS) {
+        player.alive = false; // Player killed
+        // --- SOUND: Death ---
+        soundManager.playSound('death', player.centerX, player.centerY);
+        gameOver();
+    }
+
+    // Check ally collisions
+    allies.forEach(ally => {
+        if (ally.alive) {
+            const dAlly = getDistance(ally.centerX, ally.centerY, x, y);
+            if (dAlly < EXPLOSION_RADIUS) {
+                ally.alive = false; // Ally is killed by explosion
+                // --- SOUND: Death ---
+                soundManager.playSound('death', ally.centerX, ally.centerY);
+            }
+        }
+    });
+
+    // Check enemy collisions
+    enemies.forEach(enemy => {
+        if (enemy.alive) {
+            const dEnemy = getDistance(enemy.centerX, enemy.centerY, x, y);
+            if (dEnemy < EXPLOSION_RADIUS) {
+                enemy.alive = false; // Enemy is killed by explosion
+                // --- SOUND: Death ---
+                soundManager.playSound('death', enemy.centerX, enemy.centerY);
+            }
+        }
+    });
+
+    // Check barbed wire destruction (optional, uncomment if explosions destroy wire)
+    /*barbedWires.forEach(barbed => {
+        if (barbed.alive) {
+             const dBarbed = Math.hypot(barbed.centerX - x, barbed.centerY - y);
+             // Consider barbed wire destroyed if its center is within blast radius
+             if (dBarbed < EXPLOSION_RADIUS) {
+                 barbed.alive = false; // Barbed wire is destroyed by explosion
+             }
+        }
+    });*/
+}
+
+function updateGame(dt) {
+    const dtSec = dt / 1000;
+    const currentWorldSpeed = getCurrentWorldSpeed();
+    worldScroll += currentWorldSpeed * dtSec;
+
+    // ── NOUVEAU : faire défiler les cratères décoratifs ──
+    decorativeCraters.forEach(c => {
+    const dx = currentWorldSpeed * dtSec;   // déplacement horizontal
+    c.x -= dx;                               // centre
+    // NEW ► on translate chaque sommet
+    c.pts.forEach(pt => { pt.x -= dx; });
+    });
+    // Optionnel : retirer les cratères totalement sortis à gauche
+    decorativeCraters = decorativeCraters.filter(c => c.x + c.radius > 0);
+
+    // ── Spawn continu de cratères décoratifs ──
+    nextDecorativeCraterTime -= dt;
+    if (nextDecorativeCraterTime <= 0) {
+        const radius = randomRange(30, 80);
+        decorativeCraters.push(
+            makeCrater(
+                canvas.width + radius,
+                randomRange(0, canvas.height),
+                radius
+            )
+    );
+        // Réinitialise le timer
+        nextDecorativeCraterTime = randomRange(
+            DECORATIVE_CRATER_SPAWN_MIN,
+            DECORATIVE_CRATER_SPAWN_MAX
+        );
+    }
+    // ─────────────────────────────────────────
+
+    // --- World Scrolling ---
+    // Move trenches, barbed wire, and anything static with the current world speed
+    nextTrenchX -= currentWorldSpeed * dtSec;
+
+    // --- Trench Generation ---
+    // Check if it's time to spawn a new trench segment
+    if (nextTrenchX <= canvas.width) {
+        // Spawn a trench just off-screen right
+        const trenchX = canvas.width + randomRange(650, 900); // Spawn distance relative to right edge
+        spawnTrench(trenchX);
+
+        // Spawn barbed wire randomly near the new trench location's X
+        // —————— Génération de lignes de barbelés ——————
+        // — Génération de colonnes verticales de barbelés —
+        // Nombre de colonnes de chaque côté (gauche et droite)
+        const colsLeft  = randomRange(3, 10);
+        const colsRight = randomRange(2, 4);
+
+        // Fonction utilitaire pour créer une colonne à un X donné
+        function spawnVerticalColumn(x) {
+            // Espacement vertical régulier entre chaque barbelé
+            const spacingY = 100 + randomRange(-10,10);
+            // Y de départ choisi aléatoirement pour décaler un peu la colonne
+            const startY = randomRange(0, canvas.height);
+            // On répartit jusqu'en bas de l'écran
+            for (let y = startY; y < randomRange(351,2151); y += spacingY) {
+                // Ajustement pour que y corresponde au sommet du barbelé
+                const topY = y - BARBED_HEIGHT/2;
+                barbedWires.push(new BarbedWire(x + randomRange(-10,10), topY));
+            }
+        }
+
+        // Colonnes à gauche de la tranchée
+        for (let i = 0; i < colsLeft; i++) {
+            const xLeft = trenchX - randomRange(10, 600);
+            spawnVerticalColumn(xLeft);
+        }
+
+        // Colonnes à droite de la tranchée
+        for (let i = 0; i < colsRight; i++) {
+            const xRight = trenchX + TRENCH_WIDTH + randomRange(350, 600);
+            spawnVerticalColumn(xRight);
+        }
+
+        // Spawn enemies near the new trench
+        const enemyCount = ENEMY_SPAWN_COUNT_BASE + score * ENEMY_SPAWN_COUNT_PER_SCORE;
+        const enemySpawnX = trenchX + (TRENCH_WIDTH - PLAYER_WIDTH) / 2 + randomRange(-10,-2); // Spawn in the trench
+        const enemySpacingY = canvas.height / Math.max(1, enemyCount); // Distribute enemies vertically
+        for (let i = 0; i < enemyCount; i++) {
+            enemies.push(new Enemy(enemySpawnX, i * enemySpacingY + randomRange(-enemySpacingY, enemySpacingY) ));
+        }
+
+        // Schedule the next trench spawn relative to the *new* trench's position
+        nextTrenchX = trenchX + TRENCH_WIDTH + randomRange(TRENCH_MIN_DIST, TRENCH_MAX_DIST) + 100;
+    }
+
+    // Move existing trenches and remove if off-screen
+    trenches.forEach(t => {
+        t.x -= currentWorldSpeed * dtSec;
+    });
+    trenches = trenches.filter(t => t.x + TRENCH_WIDTH > 0);
+
+    // Check for trench scoring and reinforcement spawning
+    trenches.forEach(t => {
+        // Player passes trench when their X is past the trench's X + width + offset
+        if (!t.counted && player.x > t.x + TRENCH_WIDTH + TRENCH_SCORE_DIST_OFFSET) {
+            t.counted = true;
+            score++;
+            updateScore();
+
+            // --- SOUND: Trench Capture ---
+            soundManager.playSound('trenchCapture');
+
+            // Spawn reinforcements
+            const reinforcements = Math.max(0, ALLY_REINFORCEMENT_BASE - score); // 10 - score, minimum 0
+            const spawnAreaHeight = canvas.height; // Reinforcements can appear anywhere vertically
+            const spawnX = -45 // Appear slightly behind player
+            const allySpacingY = spawnAreaHeight / Math.max(1, reinforcements);
+
+            for (let i = 0; i < reinforcements; i++) {
+                 // Spawn allies dispersed vertically behind the player
+                allies.push(new Ally(spawnX + randomRange(-20, 20),
+                                     i * allySpacingY + randomRange(-allySpacingY/4, allySpacingY/4) ));
+            }
+        }
+    });
+
+
+    // --- Random Explosion Spawning ---
+    timeSinceLastExplosion += dt;
+    if (timeSinceLastExplosion >= nextExplosionTime) {
+        // Spawn an explosion somewhere on screen
+        const explosionX = randomRange(0 - EXPLOSION_RADIUS, canvas.width + EXPLOSION_RADIUS); // Avoid spawning right on player's X
+        const explosionY = randomRange(-60, canvas.height + EXPLOSION_RADIUS); // Spawn within bounds
+        spawnExplosion(explosionX, explosionY);
+
+        // Schedule next explosion
+        timeSinceLastExplosion = 0;
+        nextExplosionTime = randomRange(EXPLOSION_SPAWN_INTERVAL_MIN, EXPLOSION_SPAWN_INTERVAL_MAX);
+    }
+
+    // --- Update Entities ---
+    if (player.alive) player.update(dt);
+
+    allies.forEach(a => { if (a.alive) a.update(dt); });
+    enemies.forEach(e => { if (e.alive) e.update(dt); });
+    bullets.forEach(b => { if (b.alive) b.update(dt); });
+    explosions.forEach(ex => { if (ex.alive) ex.update(dt); });
+    barbedWires.forEach(b => { if (b.alive) b.update(dt); }); // Move barbed wires with world speed
+
+    // --- Collision Detection ---
+
+    // Bullet collisions
+    bullets.forEach(bullet => {
+        if (!bullet.alive) return; // Skip inactive bullets
+
+        // --- SOUND: Bullet Whiz-by ---
+        // Check for enemy bullets passing close to the player
+        if (bullet.origin === 'enemy' && player.alive && !bullet.whizzed) {
+            const WHIZ_THRESHOLD_Y = 30; // Vertical distance threshold
+            const WHIZ_THRESHOLD_X_START = player.x - 50; // Start checking before player
+            const WHIZ_THRESHOLD_X_END = player.right + 50; // Stop checking after player
+
+            // Check if bullet is horizontally near the player and vertically aligned
+            if (bullet.x > WHIZ_THRESHOLD_X_START && bullet.x < WHIZ_THRESHOLD_X_END &&
+                Math.abs(bullet.centerY - player.centerY) < WHIZ_THRESHOLD_Y)
+            {
+                // Check if it's actually moving towards the player's horizontal area
+                // (vx < 0 for enemy bullets)
+                if (bullet.vx < 0) {
+                    soundManager.playSound('whiz', bullet.x, bullet.y);
+                    bullet.whizzed = true; // Play sound only once per bullet
+                }
+            }
+        }
+
+
+        if (bullet.origin === 'ally') {
+            // Ally bullets hit enemies
+            enemies.forEach(enemy => {
+                if (enemy.alive && bullet.intersects(enemy)) {
+                    enemy.alive = false; // Enemy killed
+                    // --- SOUND: Death ---
+                    soundManager.playSound('death', enemy.centerX, enemy.centerY);
+                    if (!bullet.pierce) {
+                        bullet.alive = false; // Non-piercing bullets are destroyed on hit
+                    }
+                    // If piercing, it continues and can hit other enemies
+                }
+            });
+        } else { // origin === 'enemy'
+            // Enemy bullets hit player
+            if (player.alive && bullet.intersects(player)) {
+                player.alive = false; // Player killed
+                // --- SOUND: Death ---
+                soundManager.playSound('death', player.centerX, player.centerY);
+                bullet.alive = false; // Bullet is destroyed on hit
+                gameOver();
+            }
+
+            // Enemy bullets hit allies
+            allies.forEach(ally => {
+                if (ally.alive && bullet.intersects(ally)) {
+                    ally.alive = false; // Ally killed
+                    // --- SOUND: Death ---
+                    soundManager.playSound('death', ally.centerX, ally.centerY);
+                    bullet.alive = false;
+                }
+            });
+        }
+    });
+
+    // Player vs Barbed Wire collision
+    if (player.alive && !player.isCrawling) { // Only check if player is standing
+        barbedWires.forEach(barbed => {
+            if (barbed.alive && player.intersects(barbed)) {
+                player.alive = false; // Player killed by barbed wire
+                // --- SOUND: Death ---
+                soundManager.playSound('death', player.centerX, player.centerY);
+                gameOver();
+            }
+        });
+    }
+
+     // Allies vs Barbed Wire collision
+     allies.forEach(ally => {
+        if (ally.alive && !ally.isCrawling) { // Only check if ally is standing
+             barbedWires.forEach(barbed => {
+                if (barbed.alive && ally.intersects(barbed)) {
+                     ally.alive = false; // Ally killed by barbed wire
+                     // --- SOUND: Death ---
+                     soundManager.playSound('death', ally.centerX, ally.centerY);
+                 }
+             });
+         }
+     });
+
+     // Enemies vs Barbed Wire collision (as per guide, enemies don't crawl and are vulnerable)
+     enemies.forEach(enemy => {
+         if (enemy.alive) { // Assuming enemies never crawl
+              barbedWires.forEach(barbed => {
+                 if (barbed.alive && enemy.intersects(barbed)) {
+                      enemy.alive = false; // Enemy killed by barbed wire
+                      // --- SOUND: Death ---
+                      soundManager.playSound('death', enemy.centerX, enemy.centerY);
+                  }
+              });
+          }
+      });
+
+
+    // --- Cleanup (Remove dead/off-screen entities) ---
+
+    // Filter out dead entities and return bullets/explosions to pools
+    bullets = bullets.filter(b => {
+        if (!b.alive) {
+            returnBullet(b); // Return to pool
+            return false;
+        }
+        return true;
+    });
+
+    explosions = explosions.filter(ex => {
+         // Explosions are removed if not alive (marked by update when crater is off-screen for duration)
+         if (!ex.alive) {
+             returnExplosion(ex); // Return to pool
+             return false;
+         }
+         return true;
+    });
+
+
+    allies = allies.filter(a => a.alive && a.x < canvas.width + a.w); // Remove dead allies and those off-screen right (they can move right)
+    enemies = enemies.filter(e => e.alive && e.x + e.w > 0); // Remove dead enemies and those off-screen left
+    barbedWires = barbedWires.filter(b => b.alive && b.x + b.w > 0); // Remove destroyed barbed wires and those off-screen left
+}
+
+
+
+/**
+ * Dessine au contexte 2D un cratère irrégulier
+ *  obj doit contenir : {x,y,radius,pts[]}
+ */
+ function drawCrater(ctx, obj){
+    // 1) Gradient radial sol → parois → lèvre
+    const grd = ctx.createRadialGradient(
+        obj.x, obj.y, obj.radius*0.3,
+        obj.x, obj.y, obj.radius
+    );
+    grd.addColorStop(0  ,'#312b29');
+    grd.addColorStop(0.6,'#4b4543');
+    grd.addColorStop(1  ,'#6a635f');
+
+    // 2) Silhouette irrégulière
+    ctx.beginPath();
+    obj.pts.forEach( (p,i) => i===0 ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y) );
+    ctx.closePath();
+
+    // 3) Remplissage + ombre interne
+    ctx.fillStyle = grd;
+    ctx.fill();
+    ctx.save();
+        ctx.clip();
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.shadowColor = 'rgba(0,0,0,0.6)';
+        ctx.shadowBlur  = 20;
+        ctx.shadowOffsetY = 8;
+        ctx.fillRect(obj.x-obj.radius, obj.y-obj.radius, obj.radius*2, obj.radius*2);
+    ctx.restore();
+
+    // 4) Contour clair de la lèvre
+    ctx.strokeStyle = 'rgba(110,100,90,0.8)';
+    ctx.lineWidth   = 3;
+    ctx.stroke();
+}
+
+
+function renderGame() {
+   
+
+    // --- Fond du champ de bataille ---
+    ctx.fillStyle = '#4a3f35';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // --- Tranchées avec dégradé et bord supérieur éclairci ---
+    /* ---------- Fond : texture terre ---------- */
+    if (!renderGame.soilPattern) {
+        renderGame.tileSize   = 64;
+        renderGame.soilPattern = createSoilPattern(renderGame.tileSize, '#4e3d31', 20);
+    }
+
+    // Décalage pour que le motif “glisse” avec le monde
+    ctx.save();
+    const offsetX = -(worldScroll % renderGame.tileSize);
+    ctx.translate(offsetX, 0);
+
+    ctx.fillStyle = renderGame.soilPattern;
+    // On déborde un peu à gauche/droite pour éviter les coutures visibles
+    ctx.fillRect(-renderGame.tileSize,
+                 0,
+                 canvas.width + renderGame.tileSize * 2,
+                 canvas.height);
+    ctx.restore();
+
+    /* ---------- Tranchées réalistes ---------- */
+    /* --- dessin des tranchées ------------------------------------------- */
+    trenches.forEach(t => {
+
+    /* ⇢ 1. PAROI GAUCHE (ombrée, silhouette irrégulière) */
+    ctx.beginPath();
+    t.leftPts.forEach((p, i) => {
+    const px = t.x + p.dx;         // dx = offset stocké dans spawnTrench
+    i ? ctx.lineTo(px, p.y) : ctx.moveTo(px, p.y);
+    });
+    const wallLeftX = t.x + TRENCH_WIDTH * 0.4;
+    ctx.lineTo(wallLeftX, canvas.height);
+    ctx.lineTo(wallLeftX, 0);
+    ctx.closePath();
+
+    const grdL = ctx.createLinearGradient(t.x, 0, wallLeftX, 0);
+    grdL.addColorStop(0, '#1f1008');
+    grdL.addColorStop(1, '#3b2b1f');
+    ctx.fillStyle = grdL;
+    ctx.fill();
+
+    /* petit bruit visuel */
+    ctx.save();
+    ctx.clip();
+    ctx.globalAlpha = 0.08;
+    ctx.drawImage(noiseCanvas, t.x, 0, TRENCH_WIDTH * .4, canvas.height);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+
+    /* ⇢ 2. PLANCHER (trapèze + débris) */
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(t.x + TRENCH_WIDTH * .4 , canvas.height);
+    ctx.lineTo(t.x + TRENCH_WIDTH * .6 , canvas.height);
+    ctx.lineTo(t.x + TRENCH_WIDTH * .55, 0);
+    ctx.lineTo(t.x + TRENCH_WIDTH * .45, 0);
+    ctx.closePath();
+    ctx.clip();
+
+    /* texture terre */
+    ctx.fillStyle = renderGame.soilPattern;
+    ctx.fillRect(t.x, 0, TRENCH_WIDTH, canvas.height);
+
+    /* débris stockés (pas de hasard en phase draw !) */
+    ctx.fillStyle = '#2f261e';
+    t.floorDebris.forEach(d => {
+    ctx.fillRect(t.x + d.dx, d.y, d.w, d.h);
+    });
+    ctx.restore();
+
+    /* ⇢ 3. PAROI DROITE (éclaircie + fissures) */
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(t.x + TRENCH_WIDTH * .6, 0);
+    ctx.lineTo(t.x + TRENCH_WIDTH     , 0);
+    ctx.lineTo(t.x + TRENCH_WIDTH     , canvas.height);
+    ctx.lineTo(t.x + TRENCH_WIDTH * .6, canvas.height);
+    ctx.closePath();
+
+    const grdR = ctx.createLinearGradient(
+    t.x + TRENCH_WIDTH * .6, 0,
+    t.x + TRENCH_WIDTH     , 0
+    );
+    grdR.addColorStop(0, '#3f3124');
+    grdR.addColorStop(1, '#7a6048');
+    ctx.fillStyle = grdR;
+    ctx.fill();
+
+    /* fissures verticales */
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+    ctx.lineWidth   = 1;
+    t.cracks.forEach(dx => {
+    const x0 = t.x + dx;
+    ctx.beginPath();
+    ctx.moveTo(x0, 0);
+    ctx.lineTo(x0, canvas.height);
+    ctx.stroke();
+    });
+    ctx.restore();
+
+    /* ⇢ 4. PLANCHES TRANSVERSALES (nœuds & clous) */
+    t.planks.forEach(pl => {
+    /* planche */
+    ctx.fillStyle = '#6e5b4d';
+    ctx.fillRect(t.x, pl.y, TRENCH_WIDTH, pl.h);
+
+    /* nœuds  */
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    pl.knots.forEach(k => {
+        ctx.beginPath();
+        ctx.arc(t.x + k.dx, pl.y + k.dy, 2, 0, Math.PI * 2);
+        ctx.stroke();
+    });
+
+    /* clous */
+    ctx.fillStyle = '#ddd';
+    pl.nails.forEach(n => {
+        ctx.beginPath();
+        ctx.arc(t.x + n.dx, pl.y + n.dy, 2, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    });
+
+    }); /* ------------------------------------------------------------------ */
+
+
+    // … suite du dessin (cratères, entités, etc.) …
+
+
+    
+    // ── NOUVEAU : dessiner les cratères décoratifs ──
+    ctx.fillStyle = 'rgba(80,80,80,1)';  // Couleur sombre/cratère
+
+    // ── NOUVEAU : dégradé radial pour les cratères ──
+    /* ---------- Cratères décoratifs ---------- */
+    decorativeCraters.forEach(c => drawCrater(ctx, c));
+    
+    // ────────────────────────────────────────────────
+    // ────────────────────────────────────────────────
+
+    // --- Cratères sous les persos (phase 'crater') ---
+    explosions.forEach(ex => {
+        if (ex.phase === 'crater' && ex.alive) ex.draw();
+    });
+
+    // --- JOUEUR + ALLIÉS triés par profondeur ---
+    const personnages = [player, ...allies]
+        .filter(ent => ent.alive)                // on ne dessine pas les morts
+        .sort((a, b) => a.bottom - b.bottom);    // a.bottom = a.y + a.h
+    personnages.forEach(ent => ent.draw());      // dessine du plus haut (petit bottom) au plus bas
+
+    // --- Ennemis et barbelés (pas besoin de tri ici) ---
+    enemies.forEach(e => e.alive && e.draw());
+    barbedWires.forEach(b => b.draw());
+
+    // --- Flèches de tir au‑dessus de tout ---
+    bullets.forEach(b => b.draw());
+
+    // --- Ombres et explosions (phases shadow/blast) ---
+    explosions.forEach(ex => {
+        if (ex.phase !== 'crater' && ex.alive) ex.draw();
+    });
+
+    // UI (score and message) is handled by HTML elements outside the canvas
+
+      /* ---------- Overlay de bruit pour uniformiser ---------- */
+      if (!renderGame.noiseOverlay) {
+        // créé une petite texture bruitée quasi‑transparente
+        const n = document.createElement('canvas');
+        n.width = n.height = 128;
+        const nx = n.getContext('2d');
+        const id = nx.createImageData(128,128);
+        for (let i=0;i<id.data.length;i+=4){
+            const v = 40 + Math.random()*25; // gris clair
+            id.data[i]=id.data[i+1]=id.data[i+2]=v;
+            id.data[i+3]=50;                 // alpha 20 %
+        }
+        nx.putImageData(id,0,0);
+        renderGame.noiseOverlay = ctx.createPattern(n,'repeat');
+    }
+    ctx.fillStyle = renderGame.noiseOverlay;
+    ctx.globalAlpha = 0.25;
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.globalAlpha = 1;
+}
+
+// --- Main Game Loop ---
+function gameLoop(time) {
+    if (!lastTime) lastTime = time; // Initialize lastTime on the first frame
+    const dt = time - lastTime; // Delta time in milliseconds
+    lastTime = time;
+
+    if (gameState === 'waitingCharge') {
+        renderGame();                   // dessine décor + entités en attente
+        requestAnimationFrame(gameLoop);
+        return;
+    }
+
+    if (gameState === 'playing') {
+        updateGame(dt);
+        renderGame();
+
+        // Only continue the loop if the player is still alive in 'playing' state
+        if (player.alive) {
+            requestAnimationFrame(gameLoop);
+        } else {
+            // Game over state handled after updateGame detects player death
+            // The loop will continue in gameover state to listen for reset input
+        }
+    } else if (gameState === 'ready' || gameState === 'gameover') {
+        // In ready or gameover state, just keep the loop running to listen for SPACE
+        // We still call renderGame to potentially show the last frame or a static scene
+        renderGame(); // Render the current state (e.g., game over screen or ready screen)
+        requestAnimationFrame(gameLoop); // Keep loop alive to detect SPACE for reset
+    }
+}
+
+// --- Initialization ---
+// Wait for initial resize and set up message
+document.getElementById('message').style.display = 'block';
+// Start game loop only when Space is pressed in 'ready' state (handled by key listener)
+
+// Initial pool creation (already done in resetGame, but good to have here too if not resetting immediately)
+// for(let i=0; i<BULLET_POOL_SIZE; i++) bulletPool.push(new Bullet());
+// for(let i=0; i<EXPLOSION_POOL_SIZE; i++) explosionPool.push(new Explosion());
+
+// Start the game loop in a paused state to listen for input
+requestAnimationFrame(gameLoop);
+
+
+})();
+</script>
+</body>
+</html>
