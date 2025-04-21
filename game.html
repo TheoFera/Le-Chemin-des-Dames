@@ -42,27 +42,24 @@ canvas{display: block;} /* Prevent margin below canvas */
 </head>
 <body>
     <div id="startMenu">
-        <h1>Le Chemin des Dames</h1>
+        <h1>L'Assaut du Chemin des Dames</h1>
         <p>
-          Vous êtes un officier français chargé de conduire le 5<sup>e</sup> régiment
-          à l’assaut du Chemin des Dames.  
-          Chaque pas est un combat, chaque tranchée un défi.  
-          Menez vos hommes vers la victoire, mais prenez garde aux obus
-          et aux barbelés ennemis…
+          Officier français chargé de conduire le 5<sup>e</sup> régiment
+          à l’assaut du Chemin des Dames, vous avez reçu l'ordre de capturer le maximum de tranchées, quel qu’en soit le coût...
         </p>
         <p>
           <strong>Commandes :</strong><br>
-          ↑ / W : monter  
-          ↓ / S : descendre  
-          ← / A : ramper  
-          <kbd>ESPACE</kbd> (maintenir 2 secs puis relacher) : tirer  
+          ↑ / W : monter  <br>
+          ↓ / S : descendre  <br>
+          ← / A : ramper  <br>
+          Maintenir <kbd>ESPACE</kbd> pour viser puis relacher pour tirer  
         </p>
         <p class="press-key">Appuyez sur une touche pour démarrer</p>
       </div>
       
 <canvas id="game"></canvas>
 <div id="ui">Tranchées capturées: <span id="score">0</span></div>
-<div id="message">Appuie sur ESPACE pour démarrer</div>
+<div id="message"></div>
 
 <!-- Sound Elements -->
 <!-- Single sounds -->
@@ -161,7 +158,7 @@ const PLAYER_WIDTH = 24; // Hitbox width
 const PLAYER_HEIGHT_STANDING = 32; // Hitbox height standing
 const PLAYER_HEIGHT_CRAWLING = 24; // Hitbox height crawling
 const PLAYER_WIDTH_CRAWLING = 34; // ← largeur souhaitée quand on rampe
-const PLAYER_CHARGE_DURATION = 500; // ms to charge a shot
+const PLAYER_CHARGE_DURATION = 300; // ms to charge a shot
 const CRAWL_SPEED_FACTOR = 0.5;  // 50 % de la vitesse normale quand on rampe (affecte monde pour joueur, et allié pour allié)
 const SHOOT_SPEED_FACTOR = 0.2; // 20 % de la vitesse normale quand le joueur charge (affecte monde)
 
@@ -183,7 +180,7 @@ const EXPLOSION_SHADOW_DURATION = 1200; // ms
 const EXPLOSION_BLAST_DURATION = 200; // ms
 const EXPLOSION_CRATER_DURATION = 3000; // ms (how long crater stays visible off-screen before pooling/removal)
 const EXPLOSION_SPAWN_INTERVAL_MIN = 300; // ms min between random explosions
-const EXPLOSION_SPAWN_INTERVAL_MAX = 1200; // ms max between random explosions
+const EXPLOSION_SPAWN_INTERVAL_MAX = 2500; // ms max between random explosions
 const EXPLOSION_POOL_SIZE = 50; // Max explosions in pool
 
 // --- Decorative crater spawn intervals (ms) ---
@@ -1362,7 +1359,7 @@ function resetGame() {
         // ── NOUVEAU ──
     // Génération aléatoire de cratères décoratifs
     decorativeCraters = [];
-    const craterCount = randomRange(15, 30);        // Nombre de cratères
+    const craterCount = randomRange(12, 25);        // Nombre de cratères
     for (let i = 0; i < craterCount; i++) {
         decorativeCraters.push(
         makeCrater(
@@ -1415,7 +1412,7 @@ function resetGame() {
 
 function gameOver() {
     gameState = 'gameover';
-    document.getElementById('message').innerText = 'Tu es mort... ESPACE pour rejouer';
+    document.getElementById('message').innerText = 'Tu es mort... ESPACE pour ressayer';
     document.getElementById('message').style.display = 'block';
     // --- SOUND: Stop Background Music ---
     soundManager.stopBgMusic();
@@ -1967,26 +1964,6 @@ function renderGame() {
     });
 
     // UI (score and message) is handled by HTML elements outside the canvas
-
-      /* ---------- Overlay de bruit pour uniformiser ---------- */
-      if (!renderGame.noiseOverlay) {
-        // créé une petite texture bruitée quasi‑transparente
-        const n = document.createElement('canvas');
-        n.width = n.height = 128;
-        const nx = n.getContext('2d');
-        const id = nx.createImageData(128,128);
-        for (let i=0;i<id.data.length;i+=4){
-            const v = 40 + Math.random()*25; // gris clair
-            id.data[i]=id.data[i+1]=id.data[i+2]=v;
-            id.data[i+3]=50;                 // alpha 20 %
-        }
-        nx.putImageData(id,0,0);
-        renderGame.noiseOverlay = ctx.createPattern(n,'repeat');
-    }
-    ctx.fillStyle = renderGame.noiseOverlay;
-    ctx.globalAlpha = 0.25;
-    ctx.fillRect(0,0,canvas.width,canvas.height);
-    ctx.globalAlpha = 1;
 }
 
 // --- Main Game Loop ---
