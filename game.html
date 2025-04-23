@@ -165,36 +165,36 @@ const SHOOT_SPEED_FACTOR = 0.2; // 20 % de la vitesse normale quand le joueur ch
 const BULLET_SPEED = 850; // px/s
 const BULLET_WIDTH = 8;
 const BULLET_HEIGHT = 3;
-const BULLET_POOL_SIZE = 100; // Max bullets in pool
+const BULLET_POOL_SIZE = 60; // Max bullets in pool
 
 const BARBED_WIDTH = 20; // Hitbox width
 const BARBED_HEIGHT = 100; // Base hitbox height (can vary)
 
 const TRENCH_WIDTH = 40;
-const TRENCH_MIN_DIST = 550; // Min pixels between trench spawns
+const TRENCH_MIN_DIST = 600; // Min pixels between trench spawns
 const TRENCH_MAX_DIST = 800; // Max pixels between trench spawns
 const TRENCH_SCORE_DIST_OFFSET = 0; // Player needs to pass trench.x + width + offset to score
 
 const EXPLOSION_RADIUS = 80; // Max radius for blast and crater
-const EXPLOSION_SHADOW_DURATION = 1200; // ms
+const EXPLOSION_SHADOW_DURATION = 3000; // ms
 const EXPLOSION_BLAST_DURATION = 200; // ms
 const EXPLOSION_CRATER_DURATION = 3000; // ms (how long crater stays visible off-screen before pooling/removal)
 const EXPLOSION_SPAWN_INTERVAL_MIN = 300; // ms min between random explosions
 const EXPLOSION_SPAWN_INTERVAL_MAX = 2500; // ms max between random explosions
-const EXPLOSION_POOL_SIZE = 50; // Max explosions in pool
+const EXPLOSION_POOL_SIZE = 40; // Max explosions in pool
 
 // --- Decorative crater spawn intervals (ms) ---
 const DECORATIVE_CRATER_SPAWN_MIN = 300;
-const DECORATIVE_CRATER_SPAWN_MAX = 4000;
+const DECORATIVE_CRATER_SPAWN_MAX = 5000;
 
 const ALLY_COUNT_INITIAL = 40 + randomRange(1,10);
 const ALLY_REINFORCEMENT_BASE = 15; // Base reinforcements (minus score)
 const ALLY_VERTICAL_SPEED = 40; // px/s random vertical move
-const ALLY_RANDOM_MOVE_INTERVAL = 2000; // ms how often ally changes random vertical speed
+const ALLY_RANDOM_MOVE_INTERVAL = 2300; // ms how often ally changes random vertical speed
 const ALLY_SHOOT_COOLDOWN_MIN = 2000; // ms 
 const ALLY_SHOOT_COOLDOWN_MAX = 12000; // ms
 const ALLY_CHARGE_DURATION = 2000; // ms for ally charged shot
-const ALLY_BARBED_WIRE_DETECTION_DIST = 100; // px distance ahead/behind to check for barbed wire
+const ALLY_BARBED_WIRE_DETECTION_DIST = 90; // px distance ahead/behind to check for barbed wire
 const ALLY_SPEED_VARIATION = 0.05; // +/- 5% variation in base speed relative to world
 const ALLY_CRATER_DETECTION_RADIUS = -20; // px radius around crater center to trigger check (0 means check against explosion radius)
 const ALLY_RANDOM_CRAWL_DURATION = 2000; // ms duration of random crawl
@@ -1205,7 +1205,7 @@ class Explosion {
         // --- SOUND: Incoming Shell (if close to player) ---
         if (player && player.alive) {
             const distance = getDistance(player.centerX, player.centerY, this.x, this.y);
-            const incomingThreshold = 600; // Distance threshold for hearing incoming shell
+            const incomingThreshold = 200; // Distance threshold for hearing incoming shell
             if (distance < incomingThreshold) {
                  soundManager.playSound('incoming', this.x, this.y);
             }
