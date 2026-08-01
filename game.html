@@ -2,60 +2,49 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>L’Assaut du Chemin des Dames</title>
 <style>
-html,body{margin:0;padding:0;background:#2b2b2b;overflow:hidden;}
-#ui{position:absolute;top:0;left:0;color:#fff;font-family:sans-serif;padding:10px;z-index:10;}
+html,body{margin:0;padding:0;background:#2b2b2b;overflow:hidden;touch-action:none;overscroll-behavior:none;}
+#ui{position:absolute;top:0;left:0;color:#fff;font-family:sans-serif;padding:10px;z-index:10;pointer-events:none;}
 #message{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;font-family:sans-serif;font-size:32px;text-align:center;pointer-events:none;z-index:10;display: none;}
-canvas{display: block;} /* Prevent margin below canvas */
+canvas{display:block;touch-action:none;user-select:none;-webkit-user-select:none;} /* Prevent margin below canvas */
 #startMenu {
   position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  background: rgba(0, 0, 0, 0.85);
-  color: #fff;
+  inset: 0;
+  background: #000;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  text-align: center;
-  padding: 20px;
   z-index: 20;
+  overflow: hidden;
+  touch-action: none;
 }
 
-#startMenu h1 {
-  font-size: 4rem;
-  margin-bottom: 1rem;
+#startMenu picture {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
-#startMenu p {
-  font-size: 1.1rem;
-  max-width: 600px;
-  margin: 0.5rem 0;
-}
-
-#startMenu .press-key {
-  margin-top: 2rem;
-  font-style: italic;
+#startMenu img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 </style>
 </head>
 <body>
     <div id="startMenu">
-        <h1>L'assaut du Chemin des Dames</h1>
-        <p>
-          Officier français chargé de conduire le 5<sup>e</sup> régiment
-          à l’assaut du Chemin des Dames, vous avez ordre de capturer le maximum de tranchées, quoi qu'il en coûte...
-        </p>
-        <p>
-          <strong>Commandes :</strong><br>
-          ↑ / W : monter  <br>
-          ↓ / S : descendre  <br>
-          ← / A : ramper  <br>
-          Maintenir <kbd>ESPACE</kbd> pour viser, puis relacher pour tirer  
-        </p>
-        <p class="press-key">Appuyez sur une touche pour démarrer</p>
-      </div>
+        <picture>
+            <source srcset="images/menu_mobile.png" media="(hover: none) and (pointer: coarse)">
+            <img src="images/menu.png" alt="Menu de L’assaut du Chemin des Dames avec les commandes du jeu">
+        </picture>
+    </div>
       
 <canvas id="game"></canvas>
 <div id="ui">Tranchées capturées: <span id="score">0</span></div>
@@ -133,7 +122,87 @@ spriteSheetImage.onerror = () => {
     // Handle error, maybe continue without sprites or show error message
     // For now, game will run with hitboxes only if DEBUG_DRAW_HITBOXES is true
 };
-spriteSheetImage.src = 'sprites.png';
+spriteSheetImage.src = 'images/sprites.png';
+
+// Texture de terre répétable. Elle est dessinée à sa taille native et défile
+// avec le monde : aucune mise à l'échelle ni texture géante supplémentaire.
+const groundTextureImage = new Image();
+const groundTextureTile = document.createElement('canvas');
+const GROUND_TEXTURE_SCALE = 0.5;
+let groundTextureLoaded = false;
+groundTextureImage.onload = () => {
+    groundTextureTile.width = Math.round(groundTextureImage.naturalWidth * GROUND_TEXTURE_SCALE);
+    groundTextureTile.height = Math.round(groundTextureImage.naturalHeight * GROUND_TEXTURE_SCALE);
+    const groundTextureCtx = groundTextureTile.getContext('2d');
+    groundTextureCtx.imageSmoothingEnabled = true;
+    groundTextureCtx.imageSmoothingQuality = 'high';
+    groundTextureCtx.drawImage(
+        groundTextureImage,
+        0,
+        0,
+        groundTextureTile.width,
+        groundTextureTile.height
+    );
+    groundTextureLoaded = true;
+};
+groundTextureImage.onerror = () => {
+    console.error('Impossible de charger texture_sol.png');
+};
+groundTextureImage.src = 'images/texture_sol.png';
+
+// Grande composition transparente superposée à la texture répétée. Sa hauteur
+// suit toujours celle de l'écran afin de donner une cohérence globale au champ
+// de bataille, sans masquer les détails de texture visibles en dessous.
+const largeGroundTextureImage = new Image();
+const LARGE_GROUND_TEXTURE_MIN_OPACITY = 0.8;
+const LARGE_GROUND_TEXTURE_MAX_OPACITY = 1;
+const LARGE_GROUND_TEXTURE_MIN_OVERLAP = 65;
+const LARGE_GROUND_TEXTURE_MAX_OVERLAP = 100;
+const largeGroundTextureTiles = [];
+let largeGroundTextureRenderWidth = 0;
+let largeGroundTextureLoaded = false;
+largeGroundTextureImage.onload = () => { largeGroundTextureLoaded = true; };
+largeGroundTextureImage.onerror = () => {
+    console.error('Impossible de charger texture_sol_grande.png');
+};
+largeGroundTextureImage.src = 'images/texture_sol_grande.png';
+
+// Éléments de décor vus du dessus. Seules les neuf zones réellement utiles
+// de la planche sont dessinées ; la grande surface transparente est ignorée.
+const decorationImage = new Image();
+let decorationImageLoaded = false;
+decorationImage.onload = () => { decorationImageLoaded = true; };
+decorationImage.onerror = () => {
+    console.error('Impossible de charger deco.png');
+};
+decorationImage.src = 'images/deco.png';
+
+const DECORATION_SPRITES = [
+    { sx: 14,  sy: 14,  sw: 164, sh: 120, minScale: 0.38, maxScale: 0.50, weight: 3 },
+    { sx: 27,  sy: 166, sw: 159, sh: 88,  minScale: 0.38, maxScale: 0.50, weight: 3 },
+    { sx: 194, sy: 35,  sw: 122, sh: 88,  minScale: 0.40, maxScale: 0.52, weight: 3 },
+    { sx: 139, sy: 289, sw: 107, sh: 83,  minScale: 0.42, maxScale: 0.56, weight: 3 },
+    { sx: 319, sy: 293, sw: 62,  sh: 91,  minScale: 0.48, maxScale: 0.62, weight: 2, depthSorted: true },
+    { sx: 32,  sy: 304, sw: 43,  sh: 82,  minScale: 0.50, maxScale: 0.66, weight: 2, depthSorted: true },
+    { sx: 351, sy: 25,  sw: 95,  sh: 86,  minScale: 0.42, maxScale: 0.56, weight: 4 },
+    { sx: 367, sy: 164, sw: 52,  sh: 83,  minScale: 0.50, maxScale: 0.68, weight: 9, depthSorted: true },
+    { sx: 284, sy: 173, sw: 35,  sh: 62,  minScale: 0.82, maxScale: 1.05, weight: 2, depthSorted: true },
+    // Grand arbre mort et grande souche : visibles régulièrement, sans dominer
+    // les armes et les pieux qui restent les décorations principales.
+    { sx: 88,  sy: 442, sw: 82,  sh: 151, minScale: 0.68, maxScale: 0.84, weight: 4, depthSorted: true, isTree: true },
+    { sx: 205, sy: 498, sw: 76,  sh: 86,  minScale: 0.72, maxScale: 0.92, weight: 4, depthSorted: true, isTree: true },
+    { sx: 310, sy: 493, sw: 61,  sh: 98,  minScale: 0.70, maxScale: 0.88, weight: 4, depthSorted: true, isTree: true },
+    // Repères verticaux : masque à gaz sur piquet et croix en bois.
+    { sx: 399, sy: 303, sw: 29,  sh: 64,  minScale: 0.78, maxScale: 1.00, weight: 2, depthSorted: true, isMarker: true },
+    { sx: 446, sy: 306, sw: 49,  sh: 60,  minScale: 0.74, maxScale: 0.96, weight: 4, depthSorted: true, isMarker: true }
+];
+const DECORATION_TOTAL_WEIGHT = DECORATION_SPRITES.reduce(
+    (total, sprite) => total + sprite.weight,
+    0
+);
+const DECORATION_SPAWN_MIN = 540;
+const DECORATION_SPAWN_MAX = 1310;
+const DECORATION_MAX_VISIBLE = 42;
 
 // --- Sprite Map (Define coordinates of each sprite in sprites.png) ---
 // You MUST adjust these values (sx, sy, sw, sh) based on YOUR sprites.png layout
@@ -155,6 +224,8 @@ const ALLY_RUN_FRAMES = [spriteMap.ally_running1, spriteMap.ally_running2];
 
 // --- Game Constants (Centralized) ---
 const WORLD_SPEED = 80; // px/s (terrain scrolling speed when player is standing/not charging)
+const RUNNER_PRELOAD_MARGIN = 240; // Zone de préparation invisible à droite de la caméra
+const MAX_FRAME_DELTA = 50; // Évite les grands bonds après un ralentissement ou un changement d'onglet
 const PLAYER_X = 80; // Fixed player horizontal position
 const PLAYER_SPEED_Y = 100; // px/s vertical
 const PLAYER_WIDTH = 24; // Hitbox width
@@ -180,8 +251,29 @@ const TRENCH_WIDTH = 40;
 const TRENCH_MIN_DIST = 600; // Min pixels between trench spawns
 const TRENCH_MAX_DIST = 800; // Max pixels between trench spawns
 const TRENCH_SCORE_DIST_OFFSET = 0; // Player needs to pass trench.x + width + offset to score
-const TRENCH_VISUAL_OVERFLOW = 6; // Irrégularités qui dépassent légèrement la hitbox
-const CRATER_VISUAL_RADIUS_FACTOR = 1.2; // Marge maximale des contours irréguliers
+const TRENCH_VISUAL_OVERFLOW = 20;
+const TRENCH_VISUAL_VARIANTS = [
+    {
+        width: 58, floorWidth: 26, irregularity: 0.8, plankMin: 5, plankMax: 7,
+        left: ['#6b513e', '#493428', '#211713'],
+        floor: ['#17110e', '#30231c', '#120d0b'],
+        right: ['#2b1e18', '#604735', '#80644d']
+    },
+    {
+        width: 66, floorWidth: 30, irregularity: 1.35, plankMin: 4, plankMax: 6,
+        left: ['#725741', '#4d382a', '#251914'],
+        floor: ['#18110e', '#392820', '#110c0a'],
+        right: ['#2c1e17', '#684b36', '#88684e']
+    },
+    {
+        width: 54, floorWidth: 22, irregularity: 0.5, plankMin: 7, plankMax: 9,
+        left: ['#604a3a', '#402f26', '#1d1511'],
+        floor: ['#130f0c', '#28201a', '#0f0b09'],
+        right: ['#241a15', '#574332', '#755c48']
+    }
+];
+const CRATER_VISUAL_RADIUS_FACTOR = 1.22; // Marge maximale des contours irréguliers
+const CRATER_PIXEL_SCALE = 3;
 
 const EXPLOSION_RADIUS = 80; // Max radius for blast and crater
 const EXPLOSION_SHADOW_DURATION = 3000; // ms
@@ -240,8 +332,10 @@ let allies = [];
 let enemies = [];
 let explosions = [];
 let decorativeCraters = [];
+let battlefieldDecorations = [];
 
 let nextDecorativeCraterTime = 0;
+let nextDecorationTime = 0;
 
 // --- Object Pools ---
 let bulletPool = [];
@@ -251,6 +345,7 @@ let enemyPool = [];
 let allyPool = [];
 let trenchPool = [];
 let decorativeCraterPool = [];
+let battlefieldDecorationPool = [];
 const pendingCraterCaches = [];
 let pendingCraterCacheIndex = 0;
 
@@ -263,6 +358,83 @@ const characterRenderOrder = [];
 
 // --- Input Handling ---
 const keys = {};
+const TOUCH_VERTICAL_DEAD_ZONE = 18;
+const TOUCH_VERTICAL_FULL_SPEED_DISTANCE = 82;
+const TOUCH_MAX_SPEED_Y = PLAYER_SPEED_Y * 1.4;
+const TOUCH_SWIPE_DISTANCE = 45;
+const TOUCH_SWIPE_DOMINANCE = 1.3;
+const TOUCH_SWIPE_HYSTERESIS = 14;
+
+// Chaque contact est affecté une fois pour toutes à la moitié où il a commencé.
+// La posture tactile reste mémorisée après le relâchement du pouce gauche.
+const touchControls = {
+    leftPointerId: null,
+    rightPointerId: null,
+    verticalSpeed: 0,
+    isCrawling: false,
+    leftStartY: 0,
+    leftLastX: 0,
+    leftLastY: 0,
+    postureAnchorX: 0,
+    postureAnchorY: 0,
+    lockedSwipeDirection: 0
+};
+
+// Le clavier et le tactile peuvent charger simultanément sans que le
+// relâchement d'une source interrompe l'autre.
+const chargeInputs = {
+    keyboard: false,
+    touch: false
+};
+
+function beginPlayerCharge(source) {
+    chargeInputs[source] = true;
+    if (gameState !== 'playing' || !player || !player.alive) return;
+
+    if (!player.isCharging) {
+        player.isCharging = true;
+        player.chargeTime = 0;
+    }
+}
+
+function endPlayerCharge(source, shouldFire = true) {
+    chargeInputs[source] = false;
+    if (chargeInputs.keyboard || chargeInputs.touch) return;
+    if (gameState !== 'playing' || !player || !player.isCharging) return;
+
+    if (shouldFire && player.chargeTime >= PLAYER_CHARGE_DURATION) {
+        spawnBullet(player.x + player.w, player.centerY, BULLET_SPEED, 'ally', false);
+    }
+    player.isCharging = false;
+    player.chargeTime = 0;
+}
+
+function launchAssault() {
+    if (gameState !== 'waitingCharge' || chargeDelayActive) return;
+
+    chargeDelayActive = true;
+    document.getElementById('message').innerText = 'Chargez !';
+    soundManager.playSound('startWhistle');
+
+    setTimeout(() => {
+        document.getElementById('message').style.display = 'none';
+        gameState = 'playing';
+        player.isWaiting = false;
+
+        const BASE = 40;
+        const STEP = 20;
+        allies.forEach((a, idx) => {
+            const jitter = Math.random() * 20;
+            setTimeout(() => a.isWaiting = false, BASE + idx * STEP + jitter);
+        });
+
+        // Si le pouce droit est resté posé pendant le coup de sifflet,
+        // le chargement commence dès que la partie devient active.
+        if (touchControls.rightPointerId !== null) beginPlayerCharge('touch');
+        chargeDelayActive = false;
+    }, 1000);
+}
+
 window.addEventListener('keydown', e => {
     keys[e.code] = true;
     if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','KeyW','KeyS','KeyA','KeyD'].includes(e.code)) {
@@ -280,56 +452,172 @@ window.addEventListener('keydown', e => {
     }
 
     /* ---------- 2) attente du coup de sifflet ---------- */
-    if (gameState === 'waitingCharge' && e.code === 'ArrowRight' && !chargeDelayActive) {
-        chargeDelayActive = true;                           // bloque la répétition
-        document.getElementById('message').innerText = 'Chargez !';
-
-        soundManager.playSound('startWhistle');
-
-        setTimeout(() => {
-            document.getElementById('message').style.display = 'none';
-
-            gameState = 'playing';
-
-            /* 1️⃣  le joueur part tout de suite */
-            player.isWaiting = false;
-
-            /* 2️⃣  les alliés partent en file indienne */
-            const BASE  = 40;   // délai mini en ms avant le 1ᵉʳ allié
-            const STEP  = 20;   // décalage fixe entre chaque allié
-            allies.forEach((a, idx) => {
-                const jitter = Math.random()*20;              // ± 20 ms d’aléa
-                setTimeout(() => a.isWaiting = false,
-                        BASE + idx*STEP + jitter);
-            });
-
-            chargeDelayActive = false;  // reset pour la partie suivante
-        }, 1000);
+    if (gameState === 'waitingCharge' && e.code === 'ArrowRight') {
+        launchAssault();
         return;
     }
 
     /* ---------- 3) actions en cours de partie ---------- */
     if (gameState === 'playing') {
-        if (e.code === 'Space' && !player.isCharging) {
-            player.isCharging = true;
-            player.chargeTime = 0;
-        }
+        if (e.code === 'Space' && !e.repeat) beginPlayerCharge('keyboard');
     }
 });
 
 
 window.addEventListener('keyup', e => {
     keys[e.code] = false;
-    // Handle charged shot release on Space keyup
-    if (gameState === 'playing' && e.code === 'Space' && player.isCharging) {
-        // Fire charged shot ONLY if fully charged AND key is released
-        if (player.chargeTime >= PLAYER_CHARGE_DURATION) {
-            spawnBullet(player.x + player.w, player.centerY, BULLET_SPEED, 'ally', false); // Piercing shot
-        }
-        // Always stop charging on keyup
-        player.isCharging = false;
-        player.chargeTime = 0;
+    if (e.code === 'Space') endPlayerCharge('keyboard');
+});
+
+function pointerPosition(event) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: (event.clientX - rect.left) * (canvas.width / rect.width),
+        y: (event.clientY - rect.top) * (canvas.height / rect.height),
+        isLeftHalf: event.clientX < rect.left + rect.width / 2
+    };
+}
+
+function updateTouchVerticalSpeed(y) {
+    const deltaY = y - touchControls.leftStartY;
+    const distance = Math.abs(deltaY);
+    if (distance <= TOUCH_VERTICAL_DEAD_ZONE) {
+        touchControls.verticalSpeed = 0;
+        return;
     }
+
+    const usableDistance = distance - TOUCH_VERTICAL_DEAD_ZONE;
+    const fullSpeedDistance = TOUCH_VERTICAL_FULL_SPEED_DISTANCE - TOUCH_VERTICAL_DEAD_ZONE;
+    const intensity = Math.min(1, usableDistance / fullSpeedDistance);
+    touchControls.verticalSpeed = Math.sign(deltaY) * TOUCH_MAX_SPEED_Y * intensity;
+}
+
+function updateTouchPosture(x, y) {
+    const stepX = x - touchControls.leftLastX;
+    const stepY = y - touchControls.leftLastY;
+
+    // Un déplacement nettement vertical devient une nouvelle origine du geste
+    // de posture. Une longue montée/descente ne gêne donc pas le swipe suivant.
+    if (Math.abs(stepY) > Math.abs(stepX) * TOUCH_SWIPE_DOMINANCE) {
+        touchControls.postureAnchorX = x;
+        touchControls.postureAnchorY = y;
+    }
+
+    const deltaX = x - touchControls.postureAnchorX;
+    const deltaY = y - touchControls.postureAnchorY;
+
+    if (
+        touchControls.lockedSwipeDirection !== 0 &&
+        deltaX * touchControls.lockedSwipeDirection <= -TOUCH_SWIPE_HYSTERESIS
+    ) {
+        touchControls.lockedSwipeDirection = 0;
+    }
+
+    const direction = Math.sign(deltaX);
+    const isHorizontalSwipe =
+        Math.abs(deltaX) >= TOUCH_SWIPE_DISTANCE &&
+        Math.abs(deltaX) > Math.abs(deltaY) * TOUCH_SWIPE_DOMINANCE;
+
+    if (
+        isHorizontalSwipe &&
+        direction !== 0 &&
+        direction !== touchControls.lockedSwipeDirection
+    ) {
+        // Gauche : ramper. Droite : se relever.
+        touchControls.isCrawling = direction < 0;
+        touchControls.lockedSwipeDirection = direction;
+        touchControls.postureAnchorX = x;
+        touchControls.postureAnchorY = y;
+    }
+
+    touchControls.leftLastX = x;
+    touchControls.leftLastY = y;
+}
+
+function releaseTouchPointer(pointerId, shouldFire = true) {
+    if (pointerId === touchControls.leftPointerId) {
+        touchControls.leftPointerId = null;
+        touchControls.verticalSpeed = 0;
+        touchControls.lockedSwipeDirection = 0;
+    }
+
+    if (pointerId === touchControls.rightPointerId) {
+        touchControls.rightPointerId = null;
+        endPlayerCharge('touch', shouldFire);
+    }
+}
+
+function resetTouchControls() {
+    touchControls.leftPointerId = null;
+    touchControls.rightPointerId = null;
+    touchControls.verticalSpeed = 0;
+    touchControls.isCrawling = false;
+    touchControls.lockedSwipeDirection = 0;
+    chargeInputs.keyboard = false;
+    chargeInputs.touch = false;
+}
+
+canvas.addEventListener('pointerdown', event => {
+    if (event.pointerType === 'mouse') return;
+    event.preventDefault();
+
+    if (gameState === 'gameover') {
+        resetGame();
+        return;
+    }
+
+    const position = pointerPosition(event);
+    if (position.isLeftHalf) {
+        if (touchControls.leftPointerId !== null) return;
+
+        touchControls.leftPointerId = event.pointerId;
+        touchControls.leftStartY = position.y;
+        touchControls.leftLastX = position.x;
+        touchControls.leftLastY = position.y;
+        touchControls.postureAnchorX = position.x;
+        touchControls.postureAnchorY = position.y;
+        touchControls.verticalSpeed = 0;
+        touchControls.lockedSwipeDirection = 0;
+    } else {
+        if (touchControls.rightPointerId !== null) return;
+
+        touchControls.rightPointerId = event.pointerId;
+        if (gameState === 'waitingCharge') launchAssault();
+        else if (gameState === 'playing') beginPlayerCharge('touch');
+    }
+
+    canvas.setPointerCapture(event.pointerId);
+});
+
+canvas.addEventListener('pointermove', event => {
+    if (event.pointerId !== touchControls.leftPointerId) return;
+    event.preventDefault();
+
+    const position = pointerPosition(event);
+    updateTouchVerticalSpeed(position.y);
+    updateTouchPosture(position.x, position.y);
+});
+
+canvas.addEventListener('pointerup', event => {
+    if (
+        event.pointerId !== touchControls.leftPointerId &&
+        event.pointerId !== touchControls.rightPointerId
+    ) return;
+
+    event.preventDefault();
+    releaseTouchPointer(event.pointerId);
+    if (canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId);
+    }
+});
+
+canvas.addEventListener('pointercancel', event => releaseTouchPointer(event.pointerId, false));
+canvas.addEventListener('lostpointercapture', event => releaseTouchPointer(event.pointerId, false));
+
+document.getElementById('startMenu').addEventListener('pointerdown', event => {
+    if (event.pointerType === 'mouse') return;
+    event.preventDefault();
+    startGame();
 });
 
 // 1️⃣ Création d’un canvas hors‑écran pour le bruit
@@ -346,6 +634,107 @@ for (let i = 0; i < id.data.length; i += 4) {
 }
 nctx.putImageData(id, 0, 0);
 
+// Effets d'explosion pré-calculés. Pendant la partie, une explosion réaliste
+// ne demande ainsi qu'un seul drawImage, comme un sprite animé classique.
+const explosionBlastFrames = [];
+const incomingShadowCanvas = document.createElement('canvas');
+
+function createExplosionVisualCaches() {
+    const frameCount = 7;
+    const size = EXPLOSION_RADIUS * 2 + 32;
+    const center = size * 0.5;
+
+    incomingShadowCanvas.width = incomingShadowCanvas.height = 64;
+    const shadowCtx = incomingShadowCanvas.getContext('2d');
+    const shadowGradient = shadowCtx.createRadialGradient(32, 32, 3, 32, 32, 31);
+    shadowGradient.addColorStop(0, 'rgba(16,12,10,0.9)');
+    shadowGradient.addColorStop(0.62, 'rgba(31,25,21,0.68)');
+    shadowGradient.addColorStop(0.88, 'rgba(42,35,30,0.28)');
+    shadowGradient.addColorStop(1, 'rgba(42,35,30,0)');
+    shadowCtx.fillStyle = shadowGradient;
+    shadowCtx.fillRect(0, 0, 64, 64);
+
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+        const progress = frameIndex / (frameCount - 1);
+        const surface = document.createElement('canvas');
+        surface.width = surface.height = size;
+        const effectCtx = surface.getContext('2d');
+        const radius = EXPLOSION_RADIUS * (0.58 + progress * 0.38);
+        const fade = 1 - progress * 0.58;
+
+        // Couronne de terre projetée, volontairement asymétrique.
+        for (let i = 0; i < 9; i++) {
+            const angle = i / 9 * Math.PI * 2 + 0.16;
+            const variation = ((i * 37) % 7) / 7;
+            const distance = radius * (0.44 + variation * 0.24);
+            const dustRadius = radius * (0.18 + ((i * 19) % 5) * 0.035);
+            const dustX = center + Math.cos(angle) * distance;
+            const dustY = center + Math.sin(angle) * distance;
+            const dust = effectCtx.createRadialGradient(dustX, dustY, 1, dustX, dustY, dustRadius);
+            dust.addColorStop(0, `rgba(87,62,43,${fade * 0.7})`);
+            dust.addColorStop(0.62, `rgba(65,49,39,${fade * 0.46})`);
+            dust.addColorStop(1, 'rgba(48,39,34,0)');
+            effectCtx.fillStyle = dust;
+            effectCtx.beginPath();
+            effectCtx.arc(dustX, dustY, dustRadius, 0, Math.PI * 2);
+            effectCtx.fill();
+        }
+
+        effectCtx.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < 7; i++) {
+            const angle = i / 7 * Math.PI * 2 + 0.28;
+            const variation = ((i * 29) % 6) / 6;
+            const distance = radius * (0.08 + progress * 0.2 + variation * 0.16);
+            const lobeRadius = radius * (0.25 + ((i * 13) % 4) * 0.055);
+            const lobeX = center + Math.cos(angle) * distance;
+            const lobeY = center + Math.sin(angle) * distance;
+            const flame = effectCtx.createRadialGradient(
+                lobeX - lobeRadius * 0.18,
+                lobeY - lobeRadius * 0.2,
+                1,
+                lobeX,
+                lobeY,
+                lobeRadius
+            );
+            flame.addColorStop(0, `rgba(255,244,174,${fade})`);
+            flame.addColorStop(0.24, `rgba(255,190,48,${fade})`);
+            flame.addColorStop(0.62, `rgba(222,83,18,${fade * 0.9})`);
+            flame.addColorStop(1, 'rgba(92,42,25,0)');
+            effectCtx.fillStyle = flame;
+            effectCtx.beginPath();
+            effectCtx.arc(lobeX, lobeY, lobeRadius, 0, Math.PI * 2);
+            effectCtx.fill();
+        }
+
+        const coreRadius = radius * 0.74;
+        const core = effectCtx.createRadialGradient(center - 6, center - 8, 2, center, center, coreRadius);
+        core.addColorStop(0, `rgba(255,255,218,${fade})`);
+        core.addColorStop(0.12, `rgba(255,213,73,${fade})`);
+        core.addColorStop(0.5, `rgba(236,107,20,${fade * 0.95})`);
+        core.addColorStop(0.78, `rgba(87,49,33,${fade * 0.7})`);
+        core.addColorStop(1, 'rgba(48,36,30,0)');
+        effectCtx.fillStyle = core;
+        effectCtx.beginPath();
+        effectCtx.arc(center, center, coreRadius, 0, Math.PI * 2);
+        effectCtx.fill();
+
+        if (progress > 0.34) {
+            effectCtx.globalCompositeOperation = 'source-over';
+            const smokeAlpha = (progress - 0.34) * 0.38;
+            const smoke = effectCtx.createRadialGradient(center, center - 8, 4, center, center, radius * 0.9);
+            smoke.addColorStop(0, `rgba(49,42,38,${smokeAlpha})`);
+            smoke.addColorStop(0.55, `rgba(72,61,54,${smokeAlpha * 0.7})`);
+            smoke.addColorStop(1, 'rgba(55,47,43,0)');
+            effectCtx.fillStyle = smoke;
+            effectCtx.fillRect(0, 0, size, size);
+        }
+
+        explosionBlastFrames.push(surface);
+    }
+}
+
+createExplosionVisualCaches();
+
 
 // --- Canvas Setup and Resize ---
 function resize() {
@@ -360,6 +749,14 @@ resize(); // Initial resize
 // --- Utility Functions ---
 function randomRange(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function randomDecorativeCraterRadius() {
+    const roll = Math.random();
+    if (roll < 0.04) return randomRange(100, 130);
+    if (roll < 0.36) return randomRange(33, 43);
+    if (roll < 0.82) return randomRange(45, 60);
+    return randomRange(64, 84);
 }
 
 function compareEntityDepth(a, b) {
@@ -402,21 +799,33 @@ function spawnTrench(x) {
     x: 0,
     counted: false,
     leftPts: [],
+    rightPts: [],
     floorDebris: [],
     cracks: [],
     planks: []
   };
 
-  /* 1) paroi gauche ----------------------------------- */
+  trench.visualVariant = randomRange(0, TRENCH_VISUAL_VARIANTS.length - 1);
+  const visualVariant = TRENCH_VISUAL_VARIANTS[trench.visualVariant];
+
+  /* 1) contours gauche et droit ------------------------ */
   const leftPts = trench.leftPts;
+  const rightPts = trench.rightPts || (trench.rightPts = []);
   let leftPointCount = 0;
-  for (let y = 0; y <= h; y += 50) {
+  let y = 0;
+  while (true) {
     const point = leftPts[leftPointCount] || (leftPts[leftPointCount] = {});
+    const rightPoint = rightPts[leftPointCount] || (rightPts[leftPointCount] = {});
     point.y = y;
     point.dx = (Math.random() - .5) * 10;
+    rightPoint.y = y;
+    rightPoint.dx = (Math.random() - .5) * 10;
     leftPointCount++;
+    if (y === h) break;
+    y = Math.min(h, y + randomRange(38, 56));
   }
   leftPts.length = leftPointCount;
+  rightPts.length = leftPointCount;
 
   /* 2) débris du sol ---------------------------------- */
   const floorDebris = trench.floorDebris;
@@ -438,7 +847,7 @@ function spawnTrench(x) {
 
   /* 4) planches --------------------------------------- */
   const planks = trench.planks;
-  const plankCount = 6;
+  const plankCount = randomRange(visualVariant.plankMin, visualVariant.plankMax);
   for (let i = 0; i < plankCount; i++) {
     const y  = (i+1)*(h/(plankCount+1)) + randomRange(-5,5);
     const ht = 8 + randomRange(-2,2);
@@ -446,6 +855,8 @@ function spawnTrench(x) {
     const plank = planks[i] || (planks[i] = { knots: [], nails: [] });
     plank.y = y;
     plank.h = ht;
+    plank.leftInset = randomRange(0, 4);
+    plank.rightInset = randomRange(0, 4);
 
     const knots = plank.knots;
     for (let k=0;k<3;k++) {
@@ -473,141 +884,90 @@ function spawnTrench(x) {
 
 
 
-function createSoilPattern(size, base, varPct = 15) {
-    const c = document.createElement('canvas');
-    c.width = c.height = size;
-    const cx = c.getContext('2d');
-    cx.fillStyle = base;
-    cx.fillRect(0, 0, size, size);
+function traceCraterPath(targetCtx, crater, centerX, centerY, scale) {
+    const points = crater.pts;
+    const firstX = centerX + (points[0].x - crater.x) * scale;
+    const firstY = centerY + (points[0].y - crater.y) * scale;
+    const secondX = centerX + (points[1].x - crater.x) * scale;
+    const secondY = centerY + (points[1].y - crater.y) * scale;
 
-    const imgData = cx.getImageData(0, 0, size, size);
-    const d = imgData.data;
-    for (let i = 0; i < d.length; i += 4) {
-        // Variation aléatoire autour de la couleur de base
-        const v = (Math.random() - .5) * varPct;          // [-varPct/2 ; +varPct/2]
-        d[i  ] = d[i  ] + v;   // R
-        d[i+1] = d[i+1] + v;   // G
-        d[i+2] = d[i+2] + v;   // B
+    targetCtx.beginPath();
+    targetCtx.moveTo((firstX + secondX) * 0.5, (firstY + secondY) * 0.5);
+    for (let i = 1; i <= points.length; i++) {
+        const current = points[i % points.length];
+        const next = points[(i + 1) % points.length];
+        const currentX = centerX + (current.x - crater.x) * scale;
+        const currentY = centerY + (current.y - crater.y) * scale;
+        const nextX = centerX + (next.x - crater.x) * scale;
+        const nextY = centerY + (next.y - crater.y) * scale;
+        targetCtx.quadraticCurveTo(
+            currentX,
+            currentY,
+            (currentX + nextX) * 0.5,
+            (currentY + nextY) * 0.5
+        );
     }
-    cx.putImageData(imgData, 0, 0);
-    return ctx.createPattern(c, 'repeat');
+    targetCtx.closePath();
 }
 
-/**
- * Trace un “cercle” irrégulier pour un crater
- *  cx, cy  : centre
- *  r       : rayon moyen
- *  rough   : % d’irrégularité (0‑1)
- *  points  : nombre de sommets
- */
-function drawIrregularRing(cx_, cy_, r, rough = .25, points = 32) {
-    ctx.beginPath();
-    for (let i = 0; i <= points; i++) {
-        const a   = (i / points) * 2 * Math.PI;
-        const off = r * (1 + (Math.random() - .5) * rough);
-        const x   = cx_ + Math.cos(a) * off;
-        const y   = cy_ + Math.sin(a) * off;
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-}
+// Version de secours visible seulement pendant les quelques images précédant
+// la création du cache. Le rendu complet ci-dessous est ensuite réutilisé.
+function drawCraterVector(targetCtx, crater) {
+    traceCraterPath(targetCtx, crater, crater.x, crater.y, 1);
+    targetCtx.fillStyle = '#2b211a';
+    targetCtx.fill();
 
-// --- Dessin commun à TOUS les cratères ---------------------------------
-function drawCraterVector(ctx, c){
-    // 1) gradient radial
-    const grd = ctx.createRadialGradient(
-        c.x, c.y, c.radius*0.3,
-        c.x, c.y, c.radius
-    );
-    grd.addColorStop(0,   '#312b29');
-    grd.addColorStop(0.6, '#4b4543');
-    grd.addColorStop(1,   '#6a635f');
+    traceCraterPath(targetCtx, crater, crater.x, crater.y - 1, 0.88);
+    targetCtx.fillStyle = '#5b4433';
+    targetCtx.fill();
 
-    // 2) polygone irrégulier
-    ctx.beginPath();
-    c.pts.forEach((p,i)=>{
-        const px = p.x, py = p.y;
-        if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
-    });
-    ctx.closePath();
-
-    // 3) remplissage + ombre interne + contour
-    ctx.fillStyle = grd;
-    ctx.fill();
-
-    ctx.save();
-    ctx.clip();
-    ctx.globalCompositeOperation = 'source-atop';
-    ctx.shadowColor   = 'rgba(0,0,0,0.6)';
-    ctx.shadowBlur    = 20;
-    ctx.shadowOffsetY = 8;
-    ctx.fillRect(c.x - c.radius, c.y - c.radius, c.radius*2, c.radius*2);
-    ctx.restore();
-
-    ctx.strokeStyle = 'rgba(110,100,90,0.8)';
-    ctx.lineWidth = 3;
-    ctx.stroke();
+    traceCraterPath(targetCtx, crater, crater.x, crater.y + 2, 0.68);
+    targetCtx.fillStyle = '#18130f';
+    targetCtx.fill();
 }
 
 function cacheCraterDrawing(crater) {
     const visualRadius = Math.ceil(crater.radius * CRATER_VISUAL_RADIUS_FACTOR + 2);
-    const size = visualRadius * 2;
+    const displaySize = visualRadius * 2;
+    const size = Math.ceil(displaySize / CRATER_PIXEL_SCALE);
     const surface = crater.renderCache || document.createElement('canvas');
     surface.width = size;
     surface.height = size;
 
     const cacheCtx = surface.getContext('2d');
-    const center = visualRadius;
-    const gradient = cacheCtx.createRadialGradient(
-        center, center, crater.radius * 0.3,
-        center, center, crater.radius
-    );
-    gradient.addColorStop(0, '#312b29');
-    gradient.addColorStop(0.6, '#4b4543');
-    gradient.addColorStop(1, '#6a635f');
+    cacheCtx.imageSmoothingEnabled = false;
+    const center = size * 0.5;
+    const radius = crater.radius / CRATER_PIXEL_SCALE;
+    const pathScale = 1 / CRATER_PIXEL_SCALE;
 
-    cacheCtx.beginPath();
-    for (let i = 0; i < crater.pts.length; i++) {
-        const point = crater.pts[i];
-        const localX = center + point.x - crater.x;
-        const localY = center + point.y - crater.y;
-        if (i === 0) cacheCtx.moveTo(localX, localY);
-        else cacheCtx.lineTo(localX, localY);
-    }
-    cacheCtx.closePath();
-
-    cacheCtx.fillStyle = gradient;
+    // Quatre aplats seulement : le cache minuscule sera agrandi sans lissage.
+    traceCraterPath(cacheCtx, crater, center, center + 1, pathScale);
+    cacheCtx.fillStyle = '#2a2019';
     cacheCtx.fill();
-    cacheCtx.save();
-    cacheCtx.clip();
-    cacheCtx.globalCompositeOperation = 'source-atop';
-    cacheCtx.shadowColor = 'rgba(0,0,0,0.6)';
-    cacheCtx.shadowBlur = 20;
-    cacheCtx.shadowOffsetY = 8;
-    cacheCtx.fillRect(
-        center - crater.radius,
-        center - crater.radius,
-        crater.radius * 2,
-        crater.radius * 2
-    );
-    cacheCtx.restore();
+
+    traceCraterPath(cacheCtx, crater, center, center - 0.5, pathScale * 0.9);
+    cacheCtx.fillStyle = '#614936';
+    cacheCtx.fill();
+
+    traceCraterPath(cacheCtx, crater, center, center + 0.8, pathScale * 0.7);
+    cacheCtx.fillStyle = '#2b211a';
+    cacheCtx.fill();
+
+    traceCraterPath(cacheCtx, crater, center, center + 1.2, pathScale * 0.48);
+    cacheCtx.fillStyle = '#17120f';
+    cacheCtx.fill();
+
+    // Quelques pixels clairs suggèrent la terre retournée côté lumière.
+    cacheCtx.fillStyle = '#7a5c42';
+    cacheCtx.fillRect(Math.round(center - radius * 0.65), Math.round(center - radius * 0.67), 2, 1);
+    if (radius > 8) {
+        cacheCtx.fillRect(Math.round(center + radius * 0.28), Math.round(center - radius * 0.72), 1, 1);
+    }
 
     crater.renderCache = surface;
     crater.renderCacheOffset = visualRadius;
+    crater.renderCacheDisplaySize = displaySize;
     crater.renderCacheReady = true;
-}
-
-function drawCraterOutline(ctx, crater) {
-    ctx.beginPath();
-    for (let i = 0; i < crater.pts.length; i++) {
-        const point = crater.pts[i];
-        if (i === 0) ctx.moveTo(point.x, point.y);
-        else ctx.lineTo(point.x, point.y);
-    }
-    ctx.closePath();
-    ctx.strokeStyle = 'rgba(110,100,90,0.8)';
-    ctx.lineWidth = 3;
-    ctx.stroke();
 }
 
 function queueCraterCache(crater) {
@@ -615,7 +975,7 @@ function queueCraterCache(crater) {
     pendingCraterCaches.push(crater);
 }
 
-function processCraterCacheQueue(maxPerFrame = 2) {
+function processCraterCacheQueue(maxPerFrame = 4) {
     let processed = 0;
     while (pendingCraterCacheIndex < pendingCraterCaches.length && processed < maxPerFrame) {
         const crater = pendingCraterCaches[pendingCraterCacheIndex++];
@@ -630,7 +990,7 @@ function processCraterCacheQueue(maxPerFrame = 2) {
 }
 
 function makeCrater(x, y, radius) {
-    const rough  = 0.35;      // irrégularité
+    const rough  = 0.2;       // irrégularité douce, lissée lors du dessin
     const N      = 32;        // nombre de sommets
     const crater = decorativeCraterPool.length > 0
         ? decorativeCraterPool.pop()
@@ -649,6 +1009,143 @@ function makeCrater(x, y, radius) {
     crater.radius = radius;
     queueCraterCache(crater);
     return crater;
+}
+
+function chooseDecorationSprite() {
+    let roll = Math.random() * DECORATION_TOTAL_WEIGHT;
+    for (let i = 0; i < DECORATION_SPRITES.length; i++) {
+        roll -= DECORATION_SPRITES[i].weight;
+        if (roll <= 0) return DECORATION_SPRITES[i];
+    }
+    return DECORATION_SPRITES[DECORATION_SPRITES.length - 1];
+}
+
+function decorationBaseOverlapsObstacle(x, y, width, height, useBarbedIndex = false) {
+    // Petite empreinte au sol située au bas du sprite. La partie haute est
+    // volontairement ignorée pour autoriser les chevauchements en perspective.
+    const baseX = x;
+    const baseY = y + height * 0.42;
+    const baseRadius = Math.max(4, Math.min(12, width * 0.18));
+
+    for (const crater of decorativeCraters) {
+        const minimumDistance = crater.radius * CRATER_VISUAL_RADIUS_FACTOR + baseRadius;
+        if (getDistance(baseX, baseY, crater.x, crater.y) < minimumDistance) return true;
+    }
+
+    for (const trench of trenches) {
+        const variant = TRENCH_VISUAL_VARIANTS[trench.visualVariant];
+        const trenchLeft = trench.x - (variant.width - TRENCH_WIDTH) * 0.5;
+        if (baseX + baseRadius > trenchLeft &&
+            baseX - baseRadius < trenchLeft + variant.width) return true;
+    }
+
+    const baseLeft = baseX - baseRadius;
+    const baseTop = baseY - baseRadius;
+    const baseRight = baseX + baseRadius;
+    const baseBottom = baseY + baseRadius;
+    if (useBarbedIndex) {
+        return hasOverlappingBarbedWire(baseLeft, baseTop, baseRight, baseBottom);
+    }
+
+    for (const barbed of barbedWires) {
+        if (barbed.alive && barbed.x < baseRight && barbed.right > baseLeft &&
+            barbed.y < baseBottom && barbed.bottom > baseTop) return true;
+    }
+    return false;
+}
+
+function findDecorationPlacement(x, requestedY, width, height) {
+    const halfHeight = height * 0.5;
+    const minY = Math.min(canvas.height * 0.5, halfHeight + 8);
+    const maxY = Math.max(minY, canvas.height - halfHeight - 8);
+    const minX = Math.max(30, x - 120);
+    const maxX = Math.min(canvas.width + 180, x + 120);
+    let candidateX = x;
+    let candidateY = Math.max(minY, Math.min(maxY, requestedY));
+
+    for (let attempt = 0; attempt < 18; attempt++) {
+        if (!decorationBaseOverlapsObstacle(candidateX, candidateY, width, height)) {
+            return { x: candidateX, y: candidateY };
+        }
+        candidateX = minX + Math.random() * Math.max(0, maxX - minX);
+        candidateY = minY + Math.random() * (maxY - minY);
+    }
+    return null;
+}
+
+function findStaticCraterPlacementY(x, requestedY, radius) {
+    let candidateY = requestedY;
+    for (let attempt = 0; attempt < 14; attempt++) {
+        let overlapsDecoration = false;
+        for (const decoration of battlefieldDecorations) {
+            const baseX = decoration.x;
+            const baseY = decoration.y + decoration.height * 0.42;
+            const baseRadius = Math.max(4, Math.min(12, decoration.width * 0.18));
+            const minimumDistance = radius * CRATER_VISUAL_RADIUS_FACTOR + baseRadius;
+            if (getDistance(x, candidateY, baseX, baseY) < minimumDistance) {
+                overlapsDecoration = true;
+                break;
+            }
+        }
+        if (!overlapsDecoration) return candidateY;
+        candidateY = randomRange(0, canvas.height);
+    }
+    return null;
+}
+
+function spawnBattlefieldDecoration(x, y) {
+    if (battlefieldDecorations.length >= DECORATION_MAX_VISIBLE) return;
+
+    const sprite = chooseDecorationSprite();
+    const scale = sprite.minScale + Math.random() * (sprite.maxScale - sprite.minScale);
+    const width = Math.round(sprite.sw * scale);
+    const height = Math.round(sprite.sh * scale);
+    const placement = findDecorationPlacement(x, y, width, height);
+    if (placement === null) return;
+    x = placement.x;
+    y = placement.y;
+    const decoration = battlefieldDecorationPool.length > 0
+        ? battlefieldDecorationPool.pop()
+        : {};
+
+    decoration.x = x;
+    decoration.y = y;
+    decoration.sprite = sprite;
+    decoration.width = width;
+    decoration.height = height;
+    decoration.rotation = (Math.random() - 0.5) * 0.28;
+    decoration.flipX = Math.random() < 0.5;
+    // Le bas visuel sert de point Z, comme les pieds d'un soldat.
+    decoration.bottom = y + decoration.height * 0.5;
+    decoration.draw = drawBattlefieldDecorationEntity;
+    battlefieldDecorations.push(decoration);
+}
+
+function drawBattlefieldDecoration(targetCtx, decoration) {
+    if (!decorationImageLoaded) return;
+
+    const sprite = decoration.sprite;
+    targetCtx.save();
+    targetCtx.translate(decoration.x, decoration.y);
+    targetCtx.rotate(decoration.rotation);
+    targetCtx.scale(decoration.flipX ? -1 : 1, 1);
+    targetCtx.imageSmoothingEnabled = false;
+    targetCtx.drawImage(
+        decorationImage,
+        sprite.sx,
+        sprite.sy,
+        sprite.sw,
+        sprite.sh,
+        -decoration.width * 0.5,
+        -decoration.height * 0.5,
+        decoration.width,
+        decoration.height
+    );
+    targetCtx.restore();
+}
+
+function drawBattlefieldDecorationEntity() {
+    drawBattlefieldDecoration(ctx, this);
 }
 
 
@@ -810,23 +1307,22 @@ class Player extends Entity {
              if (this.chargeTime > PLAYER_CHARGE_DURATION) {
                  this.chargeTime = PLAYER_CHARGE_DURATION;
              }
-             // Vertical movement is still allowed while charging
-             this.vy = 0;
-             if (keys['ArrowUp'] || keys['KeyW']) this.vy = -PLAYER_SPEED_Y;
-             if (keys['ArrowDown'] || keys['KeyS']) this.vy = PLAYER_SPEED_Y;
-
-             // Crawling state is independent of charging, controlled by Left/A
-             this.isCrawling = !!(keys['ArrowLeft'] || keys['KeyA']);
-
-        } else {
-            // Handle vertical movement when not charging
-            this.vy = 0;
-            if (keys['ArrowUp'] || keys['KeyW']) this.vy = -PLAYER_SPEED_Y;
-            if (keys['ArrowDown'] || keys['KeyS']) this.vy = PLAYER_SPEED_Y;
-
-            // Handle crawling when not charging
-            this.isCrawling = !!(keys['ArrowLeft'] || keys['KeyA']);
         }
+
+        // Le déplacement vertical et la posture ne dépendent pas du tir : ils
+        // restent actifs en charge, en rampant, ou dans les deux états à la fois.
+        let keyboardVerticalSpeed = 0;
+        if (keys['ArrowUp'] || keys['KeyW']) keyboardVerticalSpeed -= PLAYER_SPEED_Y;
+        if (keys['ArrowDown'] || keys['KeyS']) keyboardVerticalSpeed += PLAYER_SPEED_Y;
+
+        const verticalSpeedLimit = touchControls.leftPointerId !== null
+            ? TOUCH_MAX_SPEED_Y
+            : PLAYER_SPEED_Y;
+        this.vy = Math.max(
+            -verticalSpeedLimit,
+            Math.min(verticalSpeedLimit, keyboardVerticalSpeed + touchControls.verticalSpeed)
+        );
+        this.isCrawling = !!(keys['ArrowLeft'] || keys['KeyA']) || touchControls.isCrawling;
 
         // Apply vertical movement
         this.y += this.vy * dtSec;
@@ -1529,9 +2025,12 @@ class Explosion {
             this.phase = 'crater';
             this.timer = 0;
             this.craterDuration = 0;
+            // Le souffle conserve son rayon de dégâts de 80 px, mais le trou
+            // visible reste à l'échelle des soldats et de la vue du dessus.
+            this.radius = randomRange(34, 54);
 
             // ⬇️ AJOUT : on génère la géométrie irrégulière
-            const rough  = 0.35;      // même « rugosité » que décoratif
+            const rough  = 0.2;       // même irrégularité douce que le décoratif
             const N      = 32;        // nombre de sommets
             this.pts = [];            // on remplit le tableau
             for (let i = 0; i < N; i++){
@@ -1578,21 +2077,31 @@ class Explosion {
     }
 
     draw() {
-        // 1) Phases « shadow » & « blast » inchangées
-        if (this.phase === 'shadow' || this.phase === 'blast'){ 
-            const color = this.phase === 'shadow'
-                         ? 'rgba(50,50,50,0.8)'
-                         : 'rgba(255,150,0,0.8)';
-            const r     = this.phase === 'shadow' ? this.radius : EXPLOSION_RADIUS;
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(this.x,this.y,r,0,Math.PI*2);
-            ctx.fill();
-            return;               // ⬅️ on sort, rien d’autre à faire
+        if (this.phase === 'shadow') {
+            const diameter = this.radius * 2;
+            ctx.drawImage(
+                incomingShadowCanvas,
+                this.x - this.radius,
+                this.y - this.radius,
+                diameter,
+                diameter
+            );
+            return;
         }
 
-        // 2) Phase « crater » : même rendu que les décoratifs
-        drawCrater(ctx, this);    // ←  (on crée cette fonction à l’étape 3)
+        if (this.phase === 'blast') {
+            const progress = Math.min(0.999, this.timer / EXPLOSION_BLAST_DURATION);
+            const frameIndex = Math.min(
+                explosionBlastFrames.length - 1,
+                Math.floor(progress * explosionBlastFrames.length)
+            );
+            const frame = explosionBlastFrames[frameIndex];
+            ctx.drawImage(frame, this.x - frame.width * 0.5, this.y - frame.height * 0.5);
+            return;
+        }
+
+        // 2) Phase « crater » : même rendu que tous les autres cratères.
+        drawCrater(ctx, this);
     }
 }
 
@@ -1669,6 +2178,7 @@ function startGame() {
 }
 
 function resetGame() {
+    resetTouchControls();
     score = 0;
     chargeDelayActive = false;   // ← remise à zéro
     updateScore();
@@ -1680,9 +2190,11 @@ function resetGame() {
     allies = [];
     enemies = [];
     explosions = [];
+    battlefieldDecorations = [];
     clearBarbedSpatialIndex();
     trenchPool = [];
     decorativeCraterPool = [];
+    battlefieldDecorationPool = [];
     pendingCraterCaches.length = 0;
     pendingCraterCacheIndex = 0;
 
@@ -1711,7 +2223,7 @@ function resetGame() {
         makeCrater(
             randomRange(180, canvas.width),
             randomRange(0, canvas.height),
-            randomRange(20, 60)
+            randomDecorativeCraterRadius()
         )
     );
     }
@@ -1720,6 +2232,20 @@ function resetGame() {
         DECORATIVE_CRATER_SPAWN_MIN,
         DECORATIVE_CRATER_SPAWN_MAX
     );
+
+    // Décor léger : davantage d'éléments sur un grand écran, tout en gardant
+    // un minimum sur téléphone. Les variations de taille restent modestes.
+    const initialDecorationCount = Math.max(
+        9,
+        Math.min(29, Math.round((canvas.width * canvas.height) / 65000))
+    );
+    for (let i = 0; i < initialDecorationCount; i++) {
+        spawnBattlefieldDecoration(
+            randomRange(150, Math.max(150, canvas.width - 20)),
+            randomRange(25, Math.max(25, canvas.height - 25))
+        );
+    }
+    nextDecorationTime = randomRange(DECORATION_SPAWN_MIN, DECORATION_SPAWN_MAX);
     // ──────────────
 
 
@@ -1746,7 +2272,9 @@ function resetGame() {
   
     // Passage à l'état d'attente de charge
     gameState = 'waitingCharge';
-    document.getElementById('message').innerText = 'Appuyer sur → pour lancer la charge';
+    document.getElementById('message').innerText = navigator.maxTouchPoints > 0
+        ? 'Touchez la moitié droite pour lancer la charge'
+        : 'Appuyer sur → pour lancer la charge';
     document.getElementById('message').style.display = 'block';
 
     // Lance immédiatement la musique de fond en boucle
@@ -1763,7 +2291,9 @@ function resetGame() {
 
 function gameOver() {
     gameState = 'gameover';
-    document.getElementById('message').innerText = 'Tu es mort... ESPACE pour ressayer';
+    document.getElementById('message').innerText = navigator.maxTouchPoints > 0
+        ? 'Tu es mort… Touchez l’écran pour ressayer'
+        : 'Tu es mort… ESPACE pour ressayer';
     document.getElementById('message').style.display = 'block';
     // --- SOUND: Stop Background Music ---
     soundManager.stopBgMusic();
@@ -1785,6 +2315,40 @@ function spawnExplosion(x, y) {
     // Explosion init method now handles playing the 'incoming' sound if close
     const explosion = getExplosion().init(x, y);
     explosions.push(explosion);
+}
+
+function destroyDecorationsInBlast(x, y) {
+    let writeIndex = 0;
+    for (let i = 0; i < battlefieldDecorations.length; i++) {
+        const decoration = battlefieldDecorations[i];
+        // Comme pour un soldat, c'est le centre réel de l'objet qui doit être
+        // compris dans le souffle : un simple contact avec le bord ne suffit pas.
+        if (getDistance(decoration.x, decoration.y, x, y) < EXPLOSION_RADIUS) {
+            battlefieldDecorationPool.push(decoration);
+        } else {
+            battlefieldDecorations[writeIndex++] = decoration;
+        }
+    }
+    battlefieldDecorations.length = writeIndex;
+}
+
+function removeDecorationsWhoseBaseIsBlocked() {
+    let writeIndex = 0;
+    for (let i = 0; i < battlefieldDecorations.length; i++) {
+        const decoration = battlefieldDecorations[i];
+        if (decorationBaseOverlapsObstacle(
+            decoration.x,
+            decoration.y,
+            decoration.width,
+            decoration.height,
+            true
+        )) {
+            battlefieldDecorationPool.push(decoration);
+        } else {
+            battlefieldDecorations[writeIndex++] = decoration;
+        }
+    }
+    battlefieldDecorations.length = writeIndex;
 }
 
 function applyBlast(x, y) {
@@ -1820,6 +2384,10 @@ function applyBlast(x, y) {
             }
         }
     }
+
+    // Arbres, croix, piquets, armes et autres éléments de deco.png sont
+    // soufflés s'ils se trouvent réellement dans la zone létale de l'obus.
+    destroyDecorationsInBlast(x, y);
 
     // Check barbed wire destruction (optional, uncomment if explosions destroy wire)
     /*barbedWires.forEach(barbed => {
@@ -1859,19 +2427,43 @@ function updateGame(dt) {
     // ── Spawn continu de cratères décoratifs ──
     nextDecorativeCraterTime -= dt;
     if (nextDecorativeCraterTime <= 0) {
-        const radius = randomRange(30, 80);
-        decorativeCraters.push(
-            makeCrater(
-                canvas.width + radius,
-                randomRange(0, canvas.height),
-                radius
-            )
-    );
+        const radius = randomDecorativeCraterRadius();
+        const craterX = canvas.width + RUNNER_PRELOAD_MARGIN + radius;
+        const craterY = findStaticCraterPlacementY(
+            craterX,
+            randomRange(0, canvas.height),
+            radius
+        );
+        if (craterY !== null) {
+            decorativeCraters.push(makeCrater(craterX, craterY, radius));
+        }
         // Réinitialise le timer
         nextDecorativeCraterTime = randomRange(
             DECORATIVE_CRATER_SPAWN_MIN,
             DECORATIVE_CRATER_SPAWN_MAX
         );
+    }
+
+    // Les petits éléments de deco.png suivent exactement le défilement du sol.
+    let decorationWriteIndex = 0;
+    for (let i = 0; i < battlefieldDecorations.length; i++) {
+        const decoration = battlefieldDecorations[i];
+        decoration.x -= decorativeCraterDx;
+        if (decoration.x + decoration.width * 0.75 > 0) {
+            battlefieldDecorations[decorationWriteIndex++] = decoration;
+        } else {
+            battlefieldDecorationPool.push(decoration);
+        }
+    }
+    battlefieldDecorations.length = decorationWriteIndex;
+
+    nextDecorationTime -= dt;
+    if (nextDecorationTime <= 0) {
+        spawnBattlefieldDecoration(
+            canvas.width + RUNNER_PRELOAD_MARGIN + 70,
+            randomRange(25, Math.max(25, canvas.height - 25))
+        );
+        nextDecorationTime = randomRange(DECORATION_SPAWN_MIN, DECORATION_SPAWN_MAX);
     }
     // ─────────────────────────────────────────
 
@@ -1883,7 +2475,10 @@ function updateGame(dt) {
     // Check if it's time to spawn a new trench segment
     if (nextTrenchX <= canvas.width) {
         // Spawn a trench just off-screen right
-        const trenchX = canvas.width + randomRange(650, 900); // Spawn distance relative to right edge
+        const trenchX = canvas.width + Math.max(
+            RUNNER_PRELOAD_MARGIN,
+            randomRange(650, 900)
+        );
         spawnTrench(trenchX);
 
         // Spawn barbed wire randomly near the new trench location's X
@@ -2000,6 +2595,9 @@ function updateGame(dt) {
     for (const barbed of barbedWires) if (barbed.alive) barbed.update(dt, barbedWorldSpeed);
     // Les collisions utilisent ensuite leurs nouvelles positions.
     rebuildBarbedSpatialIndex();
+    // Une tranchée ou une colonne de barbelés peut être créée après un décor.
+    // Dans ce cas, le décor encore hors champ cède la place à l'obstacle.
+    removeDecorationsWhoseBaseIsBlocked();
 
     // --- Collision Detection ---
 
@@ -2150,155 +2748,294 @@ function updateGame(dt) {
  */
  function drawCrater(ctx, obj){
     if (obj.renderCacheReady) {
+        const smoothing = ctx.imageSmoothingEnabled;
+        ctx.imageSmoothingEnabled = false;
         ctx.drawImage(
             obj.renderCache,
             obj.x - obj.renderCacheOffset,
-            obj.y - obj.renderCacheOffset
+            obj.y - obj.renderCacheOffset,
+            obj.renderCacheDisplaySize,
+            obj.renderCacheDisplaySize
         );
-        drawCraterOutline(ctx, obj);
+        ctx.imageSmoothingEnabled = smoothing;
     } else {
         drawCraterVector(ctx, obj);
     }
 }
 
+function traceTrenchArea(targetCtx, leftPoints, leftBaseX, leftScale, rightPoints, rightBaseX, rightScale) {
+    targetCtx.beginPath();
+    for (let i = 0; i < leftPoints.length; i++) {
+        const point = leftPoints[i];
+        const x = leftBaseX + point.dx * leftScale;
+        if (i === 0) targetCtx.moveTo(x, point.y);
+        else targetCtx.lineTo(x, point.y);
+    }
+    for (let i = rightPoints.length - 1; i >= 0; i--) {
+        const point = rightPoints[i];
+        targetCtx.lineTo(rightBaseX + point.dx * rightScale, point.y);
+    }
+    targetCtx.closePath();
+}
+
+function traceTrenchEdge(targetCtx, points, baseX, scale) {
+    targetCtx.beginPath();
+    for (let i = 0; i < points.length; i++) {
+        const point = points[i];
+        const x = baseX + point.dx * scale;
+        if (i === 0) targetCtx.moveTo(x, point.y);
+        else targetCtx.lineTo(x, point.y);
+    }
+}
+
+function drawGroundTextureTiles(targetCtx, minX = 0, maxX = canvas.width) {
+    if (!groundTextureLoaded) return;
+
+    const tileWidth = groundTextureTile.width;
+    const tileHeight = groundTextureTile.height;
+    const groundOffsetX = -Math.floor(worldScroll % tileWidth);
+    const firstTileIndex = Math.floor(worldScroll / tileWidth);
+
+    targetCtx.save();
+    targetCtx.imageSmoothingEnabled = false;
+    let column = 0;
+    for (let x = groundOffsetX; x < maxX; x += tileWidth, column++) {
+        if (x + tileWidth <= minX) continue;
+
+        let row = 0;
+        for (let y = 0; y < canvas.height; y += tileHeight, row++) {
+            const flipX = (firstTileIndex + column) % 2 !== 0;
+            const flipY = row % 2 !== 0;
+
+            targetCtx.save();
+            targetCtx.translate(x + (flipX ? tileWidth : 0), y + (flipY ? tileHeight : 0));
+            targetCtx.scale(flipX ? -1 : 1, flipY ? -1 : 1);
+            targetCtx.drawImage(groundTextureTile, 0, 0);
+            targetCtx.restore();
+        }
+    }
+    targetCtx.restore();
+}
+
+function drawLargeGroundTextureLayer(targetCtx) {
+    if (!largeGroundTextureLoaded || canvas.height <= 0) return;
+
+    const scale = canvas.height / largeGroundTextureImage.naturalHeight;
+    const layerWidth = Math.max(1, Math.ceil(largeGroundTextureImage.naturalWidth * scale));
+
+    // Une rotation d'écran change la largeur rendue de l'image. On reconstruit
+    // alors la petite liste de tuiles autour de la portion de terrain visible.
+    if (largeGroundTextureRenderWidth !== layerWidth || largeGroundTextureTiles.length === 0) {
+        largeGroundTextureRenderWidth = layerWidth;
+        largeGroundTextureTiles.length = 0;
+        const averageOverlap = (LARGE_GROUND_TEXTURE_MIN_OVERLAP + LARGE_GROUND_TEXTURE_MAX_OVERLAP) * 0.5;
+        const averageStep = Math.max(1, layerWidth - averageOverlap);
+        const firstWorldX = worldScroll - (worldScroll % averageStep);
+        largeGroundTextureTiles.push({
+            worldX: firstWorldX,
+            opacity: LARGE_GROUND_TEXTURE_MIN_OPACITY
+                + Math.random() * (LARGE_GROUND_TEXTURE_MAX_OPACITY - LARGE_GROUND_TEXTURE_MIN_OPACITY),
+            overlapAfter: randomRange(LARGE_GROUND_TEXTURE_MIN_OVERLAP, LARGE_GROUND_TEXTURE_MAX_OVERLAP)
+        });
+    }
+
+    // Chaque tuile nouvellement créée reçoit une opacité et un chevauchement
+    // qui lui sont propres. Ces valeurs sont conservées pour éviter tout
+    // scintillement d'une image à l'autre pendant le défilement.
+    const preloadWorldRight = worldScroll + canvas.width + RUNNER_PRELOAD_MARGIN;
+    while (true) {
+        const lastTile = largeGroundTextureTiles[largeGroundTextureTiles.length - 1];
+        const effectiveOverlap = Math.min(lastTile.overlapAfter, Math.max(0, layerWidth - 1));
+        const nextWorldX = lastTile.worldX + layerWidth - effectiveOverlap;
+        if (nextWorldX > preloadWorldRight) break;
+
+        largeGroundTextureTiles.push({
+            worldX: nextWorldX,
+            opacity: LARGE_GROUND_TEXTURE_MIN_OPACITY
+                + Math.random() * (LARGE_GROUND_TEXTURE_MAX_OPACITY - LARGE_GROUND_TEXTURE_MIN_OPACITY),
+            overlapAfter: randomRange(LARGE_GROUND_TEXTURE_MIN_OVERLAP, LARGE_GROUND_TEXTURE_MAX_OVERLAP)
+        });
+    }
+
+    while (largeGroundTextureTiles.length > 1 &&
+           largeGroundTextureTiles[0].worldX + layerWidth <= worldScroll) {
+        largeGroundTextureTiles.shift();
+    }
+
+    targetCtx.save();
+    targetCtx.imageSmoothingEnabled = true;
+    targetCtx.imageSmoothingQuality = 'high';
+
+    // Le fond fin est déjà dessiné dessous. Les bords transparents des grandes
+    // images se fondent grâce à leur chevauchement de 65 à 100 pixels.
+    for (const tile of largeGroundTextureTiles) {
+        const screenX = tile.worldX - worldScroll;
+        if (screenX >= canvas.width || screenX + layerWidth <= 0) continue;
+        targetCtx.globalAlpha = tile.opacity;
+        targetCtx.drawImage(largeGroundTextureImage, screenX, 0, layerWidth, canvas.height);
+    }
+
+    targetCtx.restore();
+}
 
 function renderGame() {
    
 
-    // --- Fond du champ de bataille ---
+    // Couleur de secours visible uniquement pendant le chargement de l'image.
     ctx.fillStyle = '#4a3f35';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // --- Tranchées avec dégradé et bord supérieur éclairci ---
-    /* ---------- Fond : texture terre ---------- */
-    if (!renderGame.soilPattern) {
-        renderGame.tileSize   = 64;
-        renderGame.soilPattern = createSoilPattern(renderGame.tileSize, '#4e3d31', 20);
+    // Tuile de 627 × 627 px préparée une seule fois au chargement. Elle est
+    // répétée dans les deux directions sans être redimensionnée à chaque image.
+    drawGroundTextureTiles(ctx);
+
+    // Calque panoramique transparent placé au-dessus de la texture fine du sol.
+    drawLargeGroundTextureLayer(ctx);
+
+    /* ---------- Débris et objets de deco.png, sous les obstacles ---------- */
+    for (const decoration of battlefieldDecorations) {
+        if (decoration.sprite.depthSorted) continue;
+        const halfWidth = decoration.width * 0.75;
+        const halfHeight = decoration.height * 0.75;
+        if (decoration.x + halfWidth > 0 &&
+            decoration.x - halfWidth < canvas.width &&
+            decoration.y + halfHeight > 0 &&
+            decoration.y - halfHeight < canvas.height) {
+            drawBattlefieldDecoration(ctx, decoration);
+        }
     }
 
-    // Décalage pour que le motif “glisse” avec le monde
-    ctx.save();
-    const offsetX = -(worldScroll % renderGame.tileSize);
-    ctx.translate(offsetX, 0);
-
-    ctx.fillStyle = renderGame.soilPattern;
-    // On déborde un peu à gauche/droite pour éviter les coutures visibles
-    ctx.fillRect(-renderGame.tileSize,
-                 0,
-                 canvas.width + renderGame.tileSize * 2,
-                 canvas.height);
-    ctx.restore();
-
-    /* ---------- Tranchées réalistes ---------- */
-    /* --- dessin des tranchées ------------------------------------------- */
+    /* ---------- Tranchées hybrides : profondeur + contours irréguliers ---------- */
     for (const t of trenches) {
-    // Le canvas masque ce qui est hors écran, mais exécuter tous les tracés,
-    // dégradés et détails resterait coûteux. Le résultat visible est identique.
-    if (t.x - TRENCH_VISUAL_OVERFLOW >= canvas.width ||
-        t.x + TRENCH_WIDTH + TRENCH_VISUAL_OVERFLOW <= 0) continue;
+        if (t.x - TRENCH_VISUAL_OVERFLOW >= canvas.width ||
+            t.x + TRENCH_WIDTH + TRENCH_VISUAL_OVERFLOW <= 0) continue;
 
-    /* ⇢ 1. PAROI GAUCHE (ombrée, silhouette irrégulière) */
-    ctx.beginPath();
-    for (let i = 0; i < t.leftPts.length; i++) {
-        const point = t.leftPts[i];
-        const px = t.x + point.dx;
-        if (i === 0) ctx.moveTo(px, point.y);
-        else ctx.lineTo(px, point.y);
-    }
-    const wallLeftX = t.x + TRENCH_WIDTH * 0.4;
-    ctx.lineTo(wallLeftX, canvas.height);
-    ctx.lineTo(wallLeftX, 0);
-    ctx.closePath();
+        const variant = TRENCH_VISUAL_VARIANTS[t.visualVariant];
+        const visualWidth = variant.width;
+        const trenchX = t.x - (visualWidth - TRENCH_WIDTH) * 0.5;
+        const floorWidth = variant.floorWidth;
+        const leftBankWidth = (visualWidth - floorWidth) * 0.52;
+        const floorX = trenchX + leftBankWidth;
+        const rightBankX = floorX + floorWidth;
+        const irregularity = variant.irregularity;
 
-    const grdL = ctx.createLinearGradient(t.x, 0, wallLeftX, 0);
-    grdL.addColorStop(0, '#1f1008');
-    grdL.addColorStop(1, '#3b2b1f');
-    ctx.fillStyle = grdL;
-    ctx.fill();
-
-    /* petit bruit visuel */
-    ctx.save();
-    ctx.clip();
-    ctx.globalAlpha = 0.08;
-    ctx.drawImage(noiseCanvas, t.x, 0, TRENCH_WIDTH * .4, canvas.height);
-    ctx.restore();
-    ctx.globalAlpha = 1;
-
-    /* ⇢ 2. PLANCHER (trapèze + débris) */
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(t.x + TRENCH_WIDTH * .4 , canvas.height);
-    ctx.lineTo(t.x + TRENCH_WIDTH * .6 , canvas.height);
-    ctx.lineTo(t.x + TRENCH_WIDTH * .55, 0);
-    ctx.lineTo(t.x + TRENCH_WIDTH * .45, 0);
-    ctx.closePath();
-    ctx.clip();
-
-    /* texture terre */
-    ctx.fillStyle = renderGame.soilPattern;
-    ctx.fillRect(t.x, 0, TRENCH_WIDTH, canvas.height);
-
-    /* débris stockés (pas de hasard en phase draw !) */
-    ctx.fillStyle = '#2f261e';
-    for (const debris of t.floorDebris) {
-        ctx.fillRect(t.x + debris.dx, debris.y, debris.w, debris.h);
-    }
-    ctx.restore();
-
-    /* ⇢ 3. PAROI DROITE (éclaircie + fissures) */
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(t.x + TRENCH_WIDTH * .6, 0);
-    ctx.lineTo(t.x + TRENCH_WIDTH     , 0);
-    ctx.lineTo(t.x + TRENCH_WIDTH     , canvas.height);
-    ctx.lineTo(t.x + TRENCH_WIDTH * .6, canvas.height);
-    ctx.closePath();
-
-    const grdR = ctx.createLinearGradient(
-    t.x + TRENCH_WIDTH * .6, 0,
-    t.x + TRENCH_WIDTH     , 0
-    );
-    grdR.addColorStop(0, '#3f3124');
-    grdR.addColorStop(1, '#7a6048');
-    ctx.fillStyle = grdR;
-    ctx.fill();
-
-    /* fissures verticales */
-    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-    ctx.lineWidth   = 1;
-    for (const crackDx of t.cracks) {
-        const x0 = t.x + crackDx;
-        ctx.beginPath();
-        ctx.moveTo(x0, 0);
-        ctx.lineTo(x0, canvas.height);
-        ctx.stroke();
-    }
-    ctx.restore();
-
-    /* ⇢ 4. PLANCHES TRANSVERSALES (nœuds & clous) */
-    for (const pl of t.planks) {
-    /* planche */
-    ctx.fillStyle = '#6e5b4d';
-    ctx.fillRect(t.x, pl.y, TRENCH_WIDTH, pl.h);
-
-    /* nœuds  */
-    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-    for (const k of pl.knots) {
-        ctx.beginPath();
-        ctx.arc(t.x + k.dx, pl.y + k.dy, 2, 0, Math.PI * 2);
-        ctx.stroke();
-    }
-
-    /* clous */
-    ctx.fillStyle = '#ddd';
-    for (const n of pl.nails) {
-        ctx.beginPath();
-        ctx.arc(t.x + n.dx, pl.y + n.dy, 2, 0, Math.PI * 2);
+        // Talus gauche irrégulier : la lumière disparaît vers le fond.
+        const leftBankGradient = ctx.createLinearGradient(trenchX, 0, floorX, 0);
+        leftBankGradient.addColorStop(0, variant.left[0]);
+        leftBankGradient.addColorStop(0.62, variant.left[1]);
+        leftBankGradient.addColorStop(1, variant.left[2]);
+        traceTrenchArea(
+            ctx,
+            t.leftPts, trenchX, irregularity * 0.72,
+            t.leftPts, floorX, irregularity * 0.34
+        );
+        ctx.fillStyle = leftBankGradient;
         ctx.fill();
-    }
-    }
 
-    } /* ------------------------------------------------------------------ */
+        // Fond encaissé, lui aussi délimité par deux lèvres différentes.
+        const floorGradient = ctx.createLinearGradient(floorX, 0, rightBankX, 0);
+        floorGradient.addColorStop(0, variant.floor[0]);
+        floorGradient.addColorStop(0.5, variant.floor[1]);
+        floorGradient.addColorStop(1, variant.floor[2]);
+        traceTrenchArea(
+            ctx,
+            t.leftPts, floorX, irregularity * 0.34,
+            t.rightPts, rightBankX, irregularity * 0.34
+        );
+        ctx.fillStyle = floorGradient;
+        ctx.fill();
+
+        // Même texture que le no man's land, parfaitement alignée avec lui,
+        // puis fortement assombrie pour conserver l'impression d'encaissement.
+        ctx.save();
+        traceTrenchArea(
+            ctx,
+            t.leftPts, floorX, irregularity * 0.34,
+            t.rightPts, rightBankX, irregularity * 0.34
+        );
+        ctx.clip();
+        ctx.globalAlpha = 0.34;
+        drawGroundTextureTiles(ctx, floorX - 8, rightBankX + 8);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = 'rgba(10,7,6,0.52)';
+        ctx.fillRect(floorX - 10, 0, floorWidth + 20, canvas.height);
+        ctx.restore();
+
+        // Talus droit plus clair et doté d'une silhouette indépendante.
+        const rightEdgeX = trenchX + visualWidth;
+        const rightBankGradient = ctx.createLinearGradient(rightBankX, 0, rightEdgeX, 0);
+        rightBankGradient.addColorStop(0, variant.right[0]);
+        rightBankGradient.addColorStop(0.38, variant.right[1]);
+        rightBankGradient.addColorStop(1, variant.right[2]);
+        traceTrenchArea(
+            ctx,
+            t.rightPts, rightBankX, irregularity * 0.34,
+            t.rightPts, rightEdgeX, irregularity * 0.72
+        );
+        ctx.fillStyle = rightBankGradient;
+        ctx.fill();
+
+        // Ombre et lumière fines le long des deux lèvres intérieures.
+        traceTrenchEdge(ctx, t.leftPts, floorX, irregularity * 0.34);
+        ctx.strokeStyle = 'rgba(17,11,9,0.75)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        traceTrenchEdge(ctx, t.rightPts, rightBankX, irregularity * 0.34);
+        ctx.strokeStyle = 'rgba(151,112,78,0.45)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Texture légère limitée à la silhouette irrégulière complète.
+        ctx.save();
+        traceTrenchArea(
+            ctx,
+            t.leftPts, trenchX, irregularity * 0.72,
+            t.rightPts, rightEdgeX, irregularity * 0.72
+        );
+        ctx.clip();
+        ctx.globalAlpha = 0.045;
+        ctx.drawImage(noiseCanvas, trenchX - 8, 0, visualWidth + 16, canvas.height);
+        ctx.restore();
+
+        ctx.fillStyle = '#49352a';
+        for (let i = 0; i < t.floorDebris.length; i += 4) {
+            const debris = t.floorDebris[i];
+            const debrisX = floorX + 4 + (i % 3) * Math.max(4, (floorWidth - 8) * 0.45);
+            ctx.fillRect(debrisX, Math.round(debris.y), 1, Math.max(2, Math.round(debris.h * 0.3)));
+        }
+
+        // Quantité et longueur des traverses variables selon la tranchée.
+        for (const plank of t.planks) {
+            const plankY = plank.y;
+            const plankH = Math.max(4, plank.h * 0.78);
+            const plankX = trenchX + 1 + plank.leftInset;
+            const plankWidth = visualWidth - 2 - plank.leftInset - plank.rightInset;
+            ctx.fillStyle = '#3b281d';
+            ctx.fillRect(plankX, plankY + plankH - 1, plankWidth, 2);
+            ctx.fillStyle = '#6b4b32';
+            ctx.fillRect(plankX, plankY, plankWidth, plankH - 1);
+            ctx.fillStyle = '#94704b';
+            ctx.fillRect(plankX + 1, plankY, plankWidth - 2, 1);
+
+            ctx.fillStyle = '#28201a';
+            for (const knot of plank.knots) {
+                ctx.beginPath();
+                ctx.arc(plankX + knot.dx / TRENCH_WIDTH * plankWidth,
+                        plankY + knot.dy * 0.7, 1.2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            ctx.fillStyle = '#b8aa86';
+            for (const nail of plank.nails) {
+                ctx.fillRect(
+                    plankX + nail.dx / TRENCH_WIDTH * plankWidth - 0.75,
+                    plankY + nail.dy * 0.7 - 0.75,
+                    1.5,
+                    1.5
+                );
+            }
+        }
+    }
 
 
     // … suite du dessin (cratères, entités, etc.) …
@@ -2327,7 +3064,7 @@ function renderGame() {
             ex.y + visualRadius > 0 && ex.y - visualRadius < canvas.height) ex.draw();
     }
 
-    // --- JOUEUR + ALLIÉS triés par profondeur ---
+    // --- Soldats et obstacles verticaux triés ensemble par profondeur ---
     characterRenderOrder.length = 0;
     if (player && player.alive && player.right > 0 && player.x < canvas.width &&
         player.bottom > 0 && player.y < canvas.height) {
@@ -2339,14 +3076,27 @@ function renderGame() {
             characterRenderOrder.push(ally);
         }
     }
+    for (const enemy of enemies) {
+        if (enemy.alive && enemy.right > 0 && enemy.x < canvas.width &&
+            enemy.bottom > 0 && enemy.y < canvas.height) {
+            characterRenderOrder.push(enemy);
+        }
+    }
+    for (const decoration of battlefieldDecorations) {
+        if (!decoration.sprite.depthSorted) continue;
+        const halfWidth = decoration.width * 0.75;
+        const halfHeight = decoration.height * 0.75;
+        if (decoration.x + halfWidth > 0 &&
+            decoration.x - halfWidth < canvas.width &&
+            decoration.y + halfHeight > 0 &&
+            decoration.y - halfHeight < canvas.height) {
+            characterRenderOrder.push(decoration);
+        }
+    }
     characterRenderOrder.sort(compareEntityDepth);
     for (const character of characterRenderOrder) character.draw();
 
-    // --- Ennemis et barbelés (pas besoin de tri ici) ---
-    for (const enemy of enemies) {
-        if (enemy.alive && enemy.right > 0 && enemy.x < canvas.width &&
-            enemy.bottom > 0 && enemy.y < canvas.height) enemy.draw();
-    }
+    // --- Les barbelés restent au-dessus du sol et des personnages ---
     for (const barbed of barbedWires) {
         if (barbed.right > 0 && barbed.x < canvas.width &&
             barbed.bottom > 0 && barbed.y < canvas.height) barbed.draw();
@@ -2371,7 +3121,10 @@ function renderGame() {
 // --- Main Game Loop ---
 function gameLoop(time) {
     if (!lastTime) lastTime = time; // Initialize lastTime on the first frame
-    const dt = time - lastTime; // Delta time in milliseconds
+    // Un onglet masqué ou une image lourde peut retarder une frame. Sans cette
+    // limite, le monde avancerait brutalement et les objets hors champ
+    // pourraient se retrouver plusieurs dizaines de pixels dans la caméra.
+    const dt = Math.min(time - lastTime, MAX_FRAME_DELTA);
     lastTime = time;
     processCraterCacheQueue();
 
