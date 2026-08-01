@@ -112,7 +112,9 @@ canvas{display: block;} /* Prevent margin below canvas */
 <script>
 (function(){
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+// Le jeu repeint tout le canvas à chaque image : le déclarer opaque évite au
+// navigateur une composition alpha inutile, sans modifier le rendu final.
+const ctx = canvas.getContext('2d', { alpha: false });
 
 // --- Debug Flags ---
 const DEBUG_DRAW_HITBOXES = false; // Set to true to see the collision rectangles
@@ -149,6 +151,7 @@ const spriteMap = {
     enemy_standing:  { sx: 0, sy: 249, sw: 255, sh: 262 }, // Note: Large dimensions, will be scaled
     barbed_wire:     { sx: 752, sy: 0, sw: 146, sh: 615 }, // Note: Large dimensions, will be scaled/stretched
 };
+const ALLY_RUN_FRAMES = [spriteMap.ally_running1, spriteMap.ally_running2];
 
 // --- Game Constants (Centralized) ---
 const WORLD_SPEED = 80; // px/s (terrain scrolling speed when player is standing/not charging)
@@ -169,11 +172,16 @@ const BULLET_POOL_SIZE = 60; // Max bullets in pool
 
 const BARBED_WIDTH = 20; // Hitbox width
 const BARBED_HEIGHT = 100; // Base hitbox height (can vary)
+const BARBED_POOL_SIZE = 400;
+const BARBED_SPATIAL_CELL_SIZE = 128;
+const BARBED_SPATIAL_KEY_OFFSET = 16384;
 
 const TRENCH_WIDTH = 40;
 const TRENCH_MIN_DIST = 600; // Min pixels between trench spawns
 const TRENCH_MAX_DIST = 800; // Max pixels between trench spawns
 const TRENCH_SCORE_DIST_OFFSET = 0; // Player needs to pass trench.x + width + offset to score
+const TRENCH_VISUAL_OVERFLOW = 6; // Irrégularités qui dépassent légèrement la hitbox
+const CRATER_VISUAL_RADIUS_FACTOR = 1.2; // Marge maximale des contours irréguliers
 
 const EXPLOSION_RADIUS = 80; // Max radius for blast and crater
 const EXPLOSION_SHADOW_DURATION = 3000; // ms
@@ -188,6 +196,7 @@ const DECORATIVE_CRATER_SPAWN_MIN = 300;
 const DECORATIVE_CRATER_SPAWN_MAX = 5000;
 
 const ALLY_COUNT_INITIAL = 40 + randomRange(1,10);
+const ALLY_POOL_SIZE = 140;
 const ALLY_REINFORCEMENT_BASE = 15; // Base reinforcements (minus score)
 const ALLY_VERTICAL_SPEED = 40; // px/s random vertical move
 const ALLY_RANDOM_MOVE_INTERVAL = 2300; // ms how often ally changes random vertical speed
@@ -206,12 +215,14 @@ const ENEMY_SPAWN_COUNT_PER_SCORE = 1; // Additional enemies per score point
 const ENEMY_SHOOT_COOLDOWN_MIN = 2000; // ms
 const ENEMY_SHOOT_COOLDOWN_MAX = 5000; // ms
 const ENEMY_SHOOT_ALIGNMENT_THRESHOLD = 90; // px vertical difference to allow shooting
+const ENEMY_POOL_SIZE = 100;
 
 
 // --- Game State Variables ---
 let gameState = 'ready';
 let score = 0;
 let lastTime = 0;
+let animationLoopRunning = true;
 let nextTrenchX = TRENCH_MIN_DIST; // Where the next trench will be spawned (relative to canvas right edge initially)
 let timeSinceLastExplosion = 0;
 let nextExplosionTime = 0;
@@ -235,6 +246,20 @@ let nextDecorativeCraterTime = 0;
 // --- Object Pools ---
 let bulletPool = [];
 let explosionPool = [];
+let barbedWirePool = [];
+let enemyPool = [];
+let allyPool = [];
+let trenchPool = [];
+let decorativeCraterPool = [];
+const pendingCraterCaches = [];
+let pendingCraterCacheIndex = 0;
+
+// Index spatial réutilisable. Il ne change aucune collision : il évite
+// seulement de tester les barbelés situés dans une autre zone du terrain.
+const barbedSpatialBuckets = new Map();
+const usedBarbedSpatialBuckets = [];
+let barbedSpatialQueryId = 0;
+const characterRenderOrder = [];
 
 // --- Input Handling ---
 const keys = {};
@@ -337,6 +362,10 @@ function randomRange(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+function compareEntityDepth(a, b) {
+    return a.bottom - b.bottom;
+}
+
 /**
  * Returns the current horizontal world scrolling speed based on player state.
  * This speed applies to trenches, barbed wire, enemies, and non-crater explosions.
@@ -369,49 +398,77 @@ function getCurrentWorldSpeed() {
 
 function spawnTrench(x) {
   const h = canvas.height;
+  const trench = trenchPool.length > 0 ? trenchPool.pop() : {
+    x: 0,
+    counted: false,
+    leftPts: [],
+    floorDebris: [],
+    cracks: [],
+    planks: []
+  };
 
   /* 1) paroi gauche ----------------------------------- */
-  const leftPts = [];
+  const leftPts = trench.leftPts;
+  let leftPointCount = 0;
   for (let y = 0; y <= h; y += 50) {
-    leftPts.push({ y, dx: (Math.random() - .5) * 10 });   // ← offset
+    const point = leftPts[leftPointCount] || (leftPts[leftPointCount] = {});
+    point.y = y;
+    point.dx = (Math.random() - .5) * 10;
+    leftPointCount++;
   }
+  leftPts.length = leftPointCount;
 
   /* 2) débris du sol ---------------------------------- */
-  const floorDebris = [];
+  const floorDebris = trench.floorDebris;
   for (let i = 0; i < 50; i++) {
-    floorDebris.push({
-      dx : randomRange(TRENCH_WIDTH*.45, TRENCH_WIDTH*.55), // ← offset
-      y  : randomRange(0, h),
-      w  : randomRange(1,3),
-      h  : randomRange(5,15)
-    });
+    const debris = floorDebris[i] || (floorDebris[i] = {});
+    debris.dx = randomRange(TRENCH_WIDTH*.45, TRENCH_WIDTH*.55);
+    debris.y = randomRange(0, h);
+    debris.w = randomRange(1,3);
+    debris.h = randomRange(5,15);
   }
+  floorDebris.length = 50;
 
   /* 3) fissures droite -------------------------------- */
-  const cracks = [];
+  const cracks = trench.cracks;
   for (let i = 0; i < 5; i++) {
-    cracks.push( TRENCH_WIDTH*.6 + randomRange(0, TRENCH_WIDTH*.4) );  // ← offset
+    cracks[i] = TRENCH_WIDTH*.6 + randomRange(0, TRENCH_WIDTH*.4);
   }
+  cracks.length = 5;
 
   /* 4) planches --------------------------------------- */
-  const planks = [];
+  const planks = trench.planks;
   const plankCount = 6;
   for (let i = 0; i < plankCount; i++) {
     const y  = (i+1)*(h/(plankCount+1)) + randomRange(-5,5);
     const ht = 8 + randomRange(-2,2);
 
-    const knots = [];
-    for (let k=0;k<3;k++)
-      knots.push({ dx: randomRange(0, TRENCH_WIDTH), dy: randomRange(0, ht) });
+    const plank = planks[i] || (planks[i] = { knots: [], nails: [] });
+    plank.y = y;
+    plank.h = ht;
 
-    const nails = [];
-    for (let n=0;n<2;n++)
-      nails.push({ dx: randomRange(0, TRENCH_WIDTH), dy: ht/2 });
+    const knots = plank.knots;
+    for (let k=0;k<3;k++) {
+      const knot = knots[k] || (knots[k] = {});
+      knot.dx = randomRange(0, TRENCH_WIDTH);
+      knot.dy = randomRange(0, ht);
+    }
+    knots.length = 3;
 
-    planks.push({ y, h: ht, knots, nails });
+    const nails = plank.nails;
+    for (let n=0;n<2;n++) {
+      const nail = nails[n] || (nails[n] = {});
+      nail.dx = randomRange(0, TRENCH_WIDTH);
+      nail.dy = ht/2;
+    }
+    nails.length = 2;
+
   }
+  planks.length = plankCount;
 
-  trenches.push({ x, counted:false, leftPts, floorDebris, cracks, planks });
+  trench.x = x;
+  trench.counted = false;
+  trenches.push(trench);
 }
 
 
@@ -456,7 +513,7 @@ function drawIrregularRing(cx_, cy_, r, rough = .25, points = 32) {
 }
 
 // --- Dessin commun à TOUS les cratères ---------------------------------
-function drawCrater(ctx, c){
+function drawCraterVector(ctx, c){
     // 1) gradient radial
     const grd = ctx.createRadialGradient(
         c.x, c.y, c.radius*0.3,
@@ -492,17 +549,106 @@ function drawCrater(ctx, c){
     ctx.stroke();
 }
 
+function cacheCraterDrawing(crater) {
+    const visualRadius = Math.ceil(crater.radius * CRATER_VISUAL_RADIUS_FACTOR + 2);
+    const size = visualRadius * 2;
+    const surface = crater.renderCache || document.createElement('canvas');
+    surface.width = size;
+    surface.height = size;
+
+    const cacheCtx = surface.getContext('2d');
+    const center = visualRadius;
+    const gradient = cacheCtx.createRadialGradient(
+        center, center, crater.radius * 0.3,
+        center, center, crater.radius
+    );
+    gradient.addColorStop(0, '#312b29');
+    gradient.addColorStop(0.6, '#4b4543');
+    gradient.addColorStop(1, '#6a635f');
+
+    cacheCtx.beginPath();
+    for (let i = 0; i < crater.pts.length; i++) {
+        const point = crater.pts[i];
+        const localX = center + point.x - crater.x;
+        const localY = center + point.y - crater.y;
+        if (i === 0) cacheCtx.moveTo(localX, localY);
+        else cacheCtx.lineTo(localX, localY);
+    }
+    cacheCtx.closePath();
+
+    cacheCtx.fillStyle = gradient;
+    cacheCtx.fill();
+    cacheCtx.save();
+    cacheCtx.clip();
+    cacheCtx.globalCompositeOperation = 'source-atop';
+    cacheCtx.shadowColor = 'rgba(0,0,0,0.6)';
+    cacheCtx.shadowBlur = 20;
+    cacheCtx.shadowOffsetY = 8;
+    cacheCtx.fillRect(
+        center - crater.radius,
+        center - crater.radius,
+        crater.radius * 2,
+        crater.radius * 2
+    );
+    cacheCtx.restore();
+
+    crater.renderCache = surface;
+    crater.renderCacheOffset = visualRadius;
+    crater.renderCacheReady = true;
+}
+
+function drawCraterOutline(ctx, crater) {
+    ctx.beginPath();
+    for (let i = 0; i < crater.pts.length; i++) {
+        const point = crater.pts[i];
+        if (i === 0) ctx.moveTo(point.x, point.y);
+        else ctx.lineTo(point.x, point.y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(110,100,90,0.8)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+}
+
+function queueCraterCache(crater) {
+    crater.renderCacheReady = false;
+    pendingCraterCaches.push(crater);
+}
+
+function processCraterCacheQueue(maxPerFrame = 2) {
+    let processed = 0;
+    while (pendingCraterCacheIndex < pendingCraterCaches.length && processed < maxPerFrame) {
+        const crater = pendingCraterCaches[pendingCraterCacheIndex++];
+        cacheCraterDrawing(crater);
+        processed++;
+    }
+
+    if (pendingCraterCacheIndex >= pendingCraterCaches.length) {
+        pendingCraterCaches.length = 0;
+        pendingCraterCacheIndex = 0;
+    }
+}
+
 function makeCrater(x, y, radius) {
     const rough  = 0.35;      // irrégularité
     const N      = 32;        // nombre de sommets
-    const pts = [];
+    const crater = decorativeCraterPool.length > 0
+        ? decorativeCraterPool.pop()
+        : { x: 0, y: 0, radius: 0, pts: [] };
+    const pts = crater.pts;
     for (let i = 0; i < N; i++) {
         const a   = (i / N) * Math.PI * 2;
         const off = radius * (1 + (Math.random() - .5) * rough);
-        pts.push({ x: x + Math.cos(a) * off,
-                   y: y + Math.sin(a) * off });
+        const point = pts[i] || (pts[i] = {});
+        point.x = x + Math.cos(a) * off;
+        point.y = y + Math.sin(a) * off;
     }
-    return { x, y, radius, pts };
+    pts.length = N;
+    crater.x = x;
+    crater.y = y;
+    crater.radius = radius;
+    queueCraterCache(crater);
+    return crater;
 }
 
 
@@ -832,18 +978,48 @@ class Ally extends Soldier {
         this.runFrameDuration= 300 * vitesseallié;    // durée de chaque frame (ajuste à 100–200 ms)
     }
 
-    update(dt) {
+    init(x, y) {
+        const speedVariation = 1 + randomRange(
+            -ALLY_SPEED_VARIATION * 100,
+            ALLY_SPEED_VARIATION * 100
+        ) / 100;
+
+        this.x = x;
+        this.y = y;
+        this.w = PLAYER_WIDTH;
+        this.h = PLAYER_HEIGHT_STANDING;
+        this.alive = true;
+        this.color = 'green';
+        this.vy = 0;
+        this.isCrawling = false;
+        this.isCharging = false;
+        this.isWaiting = false;
+        this.chargeTime = 0;
+        this.timeSinceLastRandomMove = 0;
+        this.shootCooldown = randomRange(10000, 20000);
+        this.randomVy = 0;
+        this.nextRandomMoveTime = 0;
+        this.baseSpeedFactor = speedVariation;
+        this.crawlTimer = 0;
+        this.stayCrawlingTimer = 0;
+        this.runFrames = ALLY_RUN_FRAMES;
+        this.currentRunFrame = randomRange(0, 1);
+        this.runTimer = 0;
+        this.runFrameDuration = 300 * speedVariation;
+        return this;
+    }
+
+    update(dt, currentWorldSpeed = getCurrentWorldSpeed()) {
         /* NE RIEN FAIRE tant que l’allié attend le coup de sifflet */
 
         /* Tant qu’on attend le coup de sifflet
         → on suit simplement le scroll du monde                      */
         if (this.isWaiting) {
-            this.x -= getCurrentWorldSpeed() * dt / 1000;  // même déplacement que le décor
+            this.x -= currentWorldSpeed * dt / 1000;  // même déplacement que le décor
             return;                                        // rien d’autre
         }
         
         const dtSec = dt / 1000;
-        const currentWorldSpeed = getCurrentWorldSpeed();
 
 
 
@@ -861,12 +1037,11 @@ class Ally extends Soldier {
 
         // --- Crawling Logic (Barbed Wire & Crater) ---
         // Barbed wire detection
-        const barbedDetected = barbedWires.some(b =>
-            b.alive &&
-            // Check detection zone around the ally
-            b.x < this.x + ALLY_BARBED_WIRE_DETECTION_DIST && b.right > this.x - ALLY_BARBED_WIRE_DETECTION_DIST &&
-            // Check vertical alignment
-            b.y < this.bottom && b.bottom > this.y
+        const barbedDetected = hasOverlappingBarbedWire(
+            this.x - ALLY_BARBED_WIRE_DETECTION_DIST,
+            this.y,
+            this.x + ALLY_BARBED_WIRE_DETECTION_DIST,
+            this.bottom
         );
 
         if (barbedDetected) {
@@ -1026,10 +1201,27 @@ class Enemy extends Soldier {
         this.isCharging = false;
     }
 
-    update(dt) {
+    init(x, y) {
+        this.x = x;
+        this.y = y;
+        this.w = PLAYER_WIDTH;
+        this.h = PLAYER_HEIGHT_STANDING;
+        this.alive = true;
+        this.color = 'red';
+        this.vy = 0;
+        this.isCrawling = false;
+        this.isCharging = false;
+        this.isWaiting = false;
+        this.chargeTime = 0;
+        this.timeSinceLastRandomMove = 0;
+        this.shootCooldown = randomRange(ENEMY_SHOOT_COOLDOWN_MIN, ENEMY_SHOOT_COOLDOWN_MAX);
+        return this;
+    }
+
+    update(dt, currentWorldSpeed = getCurrentWorldSpeed()) {
         const dtSec = dt / 1000;
         // Enemies move left relative to the screen at the current world speed
-        this.x -= getCurrentWorldSpeed() * dtSec;
+        this.x -= currentWorldSpeed * dtSec;
 
         // Gestion du tir
         this.shootCooldown -= dt;
@@ -1047,7 +1239,7 @@ class Enemy extends Soldier {
             }
 
             // Check allies
-            allies.forEach(ally => {
+            for (const ally of allies) {
                 if (ally.alive && Math.abs(ally.centerY - this.centerY) < ENEMY_SHOOT_ALIGNMENT_THRESHOLD) {
                     const dx = ally.centerX - this.centerX;
                     const dy = ally.centerY - this.centerY;
@@ -1057,7 +1249,7 @@ class Enemy extends Soldier {
                         target = ally;
                     }
                 }
-            });
+            }
 
 
             if (target) {
@@ -1100,9 +1292,20 @@ class BarbedWire extends Entity {
         this.color = 'gray'; // For drawing fallback/debug
     }
 
-    update(dt) {
+    init(x, y) {
+        this.x = x;
+        this.y = y;
+        this.w = BARBED_WIDTH;
+        this.h = BARBED_HEIGHT + randomRange(-10, 20);
+        this.alive = true;
+        this.color = 'gray';
+        this._spatialQueryId = 0;
+        return this;
+    }
+
+    update(dt, currentWorldSpeed = getCurrentWorldSpeed()) {
         // Move with the terrain at the current world speed
-        this.x -= getCurrentWorldSpeed() * dt / 1000;
+        this.x -= currentWorldSpeed * dt / 1000;
     }
 
     draw() {
@@ -1130,6 +1333,99 @@ class BarbedWire extends Entity {
              // Fallback if sprites not loaded and not debugging hitboxes
              ctx.fillStyle = this.color; // Solid color fallback
              ctx.fillRect(this.x, this.y, this.w, this.h);
+        }
+    }
+}
+
+function getBarbedSpatialKey(cellX, cellY) {
+    return (cellY + BARBED_SPATIAL_KEY_OFFSET) * 65536 +
+           (cellX + BARBED_SPATIAL_KEY_OFFSET);
+}
+
+function clearBarbedSpatialIndex() {
+    for (const bucket of usedBarbedSpatialBuckets) bucket.length = 0;
+    usedBarbedSpatialBuckets.length = 0;
+}
+
+function rebuildBarbedSpatialIndex() {
+    clearBarbedSpatialIndex();
+
+    for (const barbed of barbedWires) {
+        if (!barbed.alive) continue;
+
+        const minCellX = Math.floor(barbed.x / BARBED_SPATIAL_CELL_SIZE);
+        const maxCellX = Math.floor(barbed.right / BARBED_SPATIAL_CELL_SIZE);
+        const minCellY = Math.floor(barbed.y / BARBED_SPATIAL_CELL_SIZE);
+        const maxCellY = Math.floor(barbed.bottom / BARBED_SPATIAL_CELL_SIZE);
+
+        for (let cellY = minCellY; cellY <= maxCellY; cellY++) {
+            for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+                const key = getBarbedSpatialKey(cellX, cellY);
+                let bucket = barbedSpatialBuckets.get(key);
+                if (!bucket) {
+                    bucket = [];
+                    barbedSpatialBuckets.set(key, bucket);
+                }
+                if (bucket.length === 0) usedBarbedSpatialBuckets.push(bucket);
+                bucket.push(barbed);
+            }
+        }
+    }
+}
+
+function hasOverlappingBarbedWire(left, top, right, bottom) {
+    const queryId = ++barbedSpatialQueryId;
+    const minCellX = Math.floor(left / BARBED_SPATIAL_CELL_SIZE);
+    const maxCellX = Math.floor(right / BARBED_SPATIAL_CELL_SIZE);
+    const minCellY = Math.floor(top / BARBED_SPATIAL_CELL_SIZE);
+    const maxCellY = Math.floor(bottom / BARBED_SPATIAL_CELL_SIZE);
+
+    for (let cellY = minCellY; cellY <= maxCellY; cellY++) {
+        for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+            const bucket = barbedSpatialBuckets.get(getBarbedSpatialKey(cellX, cellY));
+            if (!bucket) continue;
+
+            for (const barbed of bucket) {
+                if (barbed._spatialQueryId === queryId) continue;
+                barbed._spatialQueryId = queryId;
+                if (barbed.alive &&
+                    barbed.x < right && barbed.right > left &&
+                    barbed.y < bottom && barbed.bottom > top) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+function applyBarbedWireDamage(entity, isPlayerEntity = false) {
+    const left = entity.x;
+    const top = entity.y;
+    const right = entity.right;
+    const bottom = entity.bottom;
+    const queryId = ++barbedSpatialQueryId;
+    const minCellX = Math.floor(left / BARBED_SPATIAL_CELL_SIZE);
+    const maxCellX = Math.floor(right / BARBED_SPATIAL_CELL_SIZE);
+    const minCellY = Math.floor(top / BARBED_SPATIAL_CELL_SIZE);
+    const maxCellY = Math.floor(bottom / BARBED_SPATIAL_CELL_SIZE);
+
+    for (let cellY = minCellY; cellY <= maxCellY; cellY++) {
+        for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+            const bucket = barbedSpatialBuckets.get(getBarbedSpatialKey(cellX, cellY));
+            if (!bucket) continue;
+
+            for (const barbed of bucket) {
+                if (barbed._spatialQueryId === queryId) continue;
+                barbed._spatialQueryId = queryId;
+                if (barbed.alive &&
+                    barbed.x < right && barbed.right > left &&
+                    barbed.y < bottom && barbed.bottom > top) {
+                    entity.alive = false;
+                    soundManager.playSound('death', entity.centerX, entity.centerY);
+                    if (isPlayerEntity) gameOver();
+                }
+            }
         }
     }
 }
@@ -1190,6 +1486,9 @@ class Explosion {
         this.alive = true; // Used by pool
         this.craterDuration = 0; // How long the crater has been visible
         this.pts = null;
+        this.renderCache = null;
+        this.renderCacheOffset = 0;
+        this.renderCacheReady = false;
     }
 
     // Method to re-initialize for pooling
@@ -1221,7 +1520,9 @@ class Explosion {
         // défilement (une seule fois) :
         const dx = getCurrentWorldSpeed()*dtSec;
         this.x -= dx;
-        if(this.pts) this.pts.forEach(pt => pt.x -= dx);
+        if (this.pts) {
+            for (const point of this.pts) point.x -= dx;
+        }
 
         // passage blast → crater
         if(this.phase==='blast' && this.timer>=EXPLOSION_BLAST_DURATION){
@@ -1241,6 +1542,7 @@ class Explosion {
                     y: this.y + Math.sin(a) * off
                 });
             }
+            queueCraterCache(this);
         }
 
         if (this.phase === 'shadow') {
@@ -1324,6 +1626,39 @@ function returnExplosion(explosion) {
      explosionPool.push(explosion);
 }
 
+function getBarbedWire() {
+    return barbedWirePool.length > 0
+        ? barbedWirePool.pop()
+        : Object.create(BarbedWire.prototype);
+}
+
+function returnBarbedWire(barbed) {
+    barbed.alive = false;
+    barbedWirePool.push(barbed);
+}
+
+function getEnemy() {
+    return enemyPool.length > 0
+        ? enemyPool.pop()
+        : Object.create(Enemy.prototype);
+}
+
+function returnEnemy(enemy) {
+    enemy.alive = false;
+    enemyPool.push(enemy);
+}
+
+function getAlly() {
+    return allyPool.length > 0
+        ? allyPool.pop()
+        : Object.create(Ally.prototype);
+}
+
+function returnAlly(ally) {
+    ally.alive = false;
+    allyPool.push(ally);
+}
+
 // --- Game Logic Functions ---
 function startGame() {
     // 0. Masquer le menu de démarrage
@@ -1345,12 +1680,23 @@ function resetGame() {
     allies = [];
     enemies = [];
     explosions = [];
+    clearBarbedSpatialIndex();
+    trenchPool = [];
+    decorativeCraterPool = [];
+    pendingCraterCaches.length = 0;
+    pendingCraterCacheIndex = 0;
 
     // Clear and repopulate pools
     bulletPool = [];
     for(let i=0; i<BULLET_POOL_SIZE; i++) bulletPool.push(new Bullet());
     explosionPool = [];
     for(let i=0; i<EXPLOSION_POOL_SIZE; i++) explosionPool.push(new Explosion());
+    barbedWirePool = [];
+    for(let i=0; i<BARBED_POOL_SIZE; i++) barbedWirePool.push(Object.create(BarbedWire.prototype));
+    enemyPool = [];
+    for(let i=0; i<ENEMY_POOL_SIZE; i++) enemyPool.push(Object.create(Enemy.prototype));
+    allyPool = [];
+    for(let i=0; i<ALLY_POOL_SIZE; i++) allyPool.push(Object.create(Ally.prototype));
 
     // — Tranchée initiale à gauche (visible et déjà “comptée” pour ne pas rapporter de points) —
     spawnTrench( 68 );
@@ -1382,7 +1728,10 @@ function resetGame() {
 
     // Initial allies
     for (let i = 0; i < ALLY_COUNT_INITIAL; i++) {
-    allies.push(new Ally(player.x + randomRange(-5,4), (i + 1) * (canvas.height / (ALLY_COUNT_INITIAL + 1)) + randomRange(-5,5)));
+    allies.push(getAlly().init(
+        player.x + randomRange(-5,4),
+        (i + 1) * (canvas.height / (ALLY_COUNT_INITIAL + 1)) + randomRange(-5,5)
+    ));
     }
 
     allies.forEach(a => a.isWaiting = true);
@@ -1403,11 +1752,13 @@ function resetGame() {
     // Lance immédiatement la musique de fond en boucle
     soundManager.playSound('bgMusic');
 
-    // On démarre la boucle
+    // La boucle principale est déjà active depuis l'initialisation. On remet
+    // son horloge à zéro et on ne la relance que si elle était arrêtée.
     lastTime = performance.now();
-    requestAnimationFrame(gameLoop);
-
-
+    if (!animationLoopRunning) {
+        animationLoopRunning = true;
+        requestAnimationFrame(gameLoop);
+    }
 }
 
 function gameOver() {
@@ -1447,7 +1798,7 @@ function applyBlast(x, y) {
     }
 
     // Check ally collisions
-    allies.forEach(ally => {
+    for (const ally of allies) {
         if (ally.alive) {
             const dAlly = getDistance(ally.centerX, ally.centerY, x, y);
             if (dAlly < EXPLOSION_RADIUS) {
@@ -1456,10 +1807,10 @@ function applyBlast(x, y) {
                 soundManager.playSound('death', ally.centerX, ally.centerY);
             }
         }
-    });
+    }
 
     // Check enemy collisions
-    enemies.forEach(enemy => {
+    for (const enemy of enemies) {
         if (enemy.alive) {
             const dEnemy = getDistance(enemy.centerX, enemy.centerY, x, y);
             if (dEnemy < EXPLOSION_RADIUS) {
@@ -1468,7 +1819,7 @@ function applyBlast(x, y) {
                 soundManager.playSound('death', enemy.centerX, enemy.centerY);
             }
         }
-    });
+    }
 
     // Check barbed wire destruction (optional, uncomment if explosions destroy wire)
     /*barbedWires.forEach(barbed => {
@@ -1488,14 +1839,22 @@ function updateGame(dt) {
     worldScroll += currentWorldSpeed * dtSec;
 
     // ── NOUVEAU : faire défiler les cratères décoratifs ──
-    decorativeCraters.forEach(c => {
-    const dx = currentWorldSpeed * dtSec;   // déplacement horizontal
-    c.x -= dx;                               // centre
-    // NEW ► on translate chaque sommet
-    c.pts.forEach(pt => { pt.x -= dx; });
-    });
-    // Optionnel : retirer les cratères totalement sortis à gauche
-    decorativeCraters = decorativeCraters.filter(c => c.x + c.radius > 0);
+    const decorativeCraterDx = currentWorldSpeed * dtSec;
+    for (const crater of decorativeCraters) {
+        crater.x -= decorativeCraterDx;
+        for (const point of crater.pts) point.x -= decorativeCraterDx;
+    }
+    // Retirer les cratères sortis sans recréer un tableau à chaque image.
+    let decorativeWriteIndex = 0;
+    for (let i = 0; i < decorativeCraters.length; i++) {
+        const crater = decorativeCraters[i];
+        if (crater.x + crater.radius > 0) {
+            decorativeCraters[decorativeWriteIndex++] = crater;
+        } else {
+            decorativeCraterPool.push(crater);
+        }
+    }
+    decorativeCraters.length = decorativeWriteIndex;
 
     // ── Spawn continu de cratères décoratifs ──
     nextDecorativeCraterTime -= dt;
@@ -1544,7 +1903,7 @@ function updateGame(dt) {
             for (let y = startY; y < randomRange(351,2151); y += spacingY) {
                 // Ajustement pour que y corresponde au sommet du barbelé
                 const topY = y - BARBED_HEIGHT/2;
-                barbedWires.push(new BarbedWire(x + randomRange(-10,10), topY));
+                barbedWires.push(getBarbedWire().init(x + randomRange(-10,10), topY));
             }
         }
 
@@ -1565,7 +1924,7 @@ function updateGame(dt) {
         const enemySpawnX = trenchX + (TRENCH_WIDTH - PLAYER_WIDTH) / 2 + randomRange(-10,-2); // Spawn in the trench
         const enemySpacingY = canvas.height / Math.max(1, enemyCount); // Distribute enemies vertically
         for (let i = 0; i < enemyCount; i++) {
-            enemies.push(new Enemy(enemySpawnX, i * enemySpacingY + randomRange(-enemySpacingY, enemySpacingY) ));
+            enemies.push(getEnemy().init(enemySpawnX, i * enemySpacingY + randomRange(-enemySpacingY, enemySpacingY) ));
         }
 
         // Schedule the next trench spawn relative to the *new* trench's position
@@ -1573,13 +1932,20 @@ function updateGame(dt) {
     }
 
     // Move existing trenches and remove if off-screen
-    trenches.forEach(t => {
-        t.x -= currentWorldSpeed * dtSec;
-    });
-    trenches = trenches.filter(t => t.x + TRENCH_WIDTH > 0);
+    for (const trench of trenches) trench.x -= currentWorldSpeed * dtSec;
+    let trenchWriteIndex = 0;
+    for (let i = 0; i < trenches.length; i++) {
+        const trench = trenches[i];
+        if (trench.x + TRENCH_WIDTH > 0) {
+            trenches[trenchWriteIndex++] = trench;
+        } else {
+            trenchPool.push(trench);
+        }
+    }
+    trenches.length = trenchWriteIndex;
 
     // Check for trench scoring and reinforcement spawning
-    trenches.forEach(t => {
+    for (const t of trenches) {
         // Player passes trench when their X is past the trench's X + width + offset
         if (!t.counted && player.x > t.x + TRENCH_WIDTH + TRENCH_SCORE_DIST_OFFSET) {
             t.counted = true;
@@ -1597,11 +1963,13 @@ function updateGame(dt) {
 
             for (let i = 0; i < reinforcements; i++) {
                  // Spawn allies dispersed vertically behind the player
-                allies.push(new Ally(spawnX + randomRange(-20, 20),
-                                     i * allySpacingY + randomRange(-allySpacingY/4, allySpacingY/4) ));
+                allies.push(getAlly().init(
+                    spawnX + randomRange(-20, 20),
+                    i * allySpacingY + randomRange(-allySpacingY/4, allySpacingY/4)
+                ));
             }
         }
-    });
+    }
 
 
     // --- Random Explosion Spawning ---
@@ -1619,18 +1987,25 @@ function updateGame(dt) {
 
     // --- Update Entities ---
     if (player.alive) player.update(dt);
+    const soldierWorldSpeed = getCurrentWorldSpeed();
 
-    allies.forEach(a => { if (a.alive) a.update(dt); });
-    enemies.forEach(e => { if (e.alive) e.update(dt); });
-    bullets.forEach(b => { if (b.alive) b.update(dt); });
-    explosions.forEach(ex => { if (ex.alive) ex.update(dt); });
-    barbedWires.forEach(b => { if (b.alive) b.update(dt); }); // Move barbed wires with world speed
+    // Les alliés détectent les barbelés avant leur déplacement horizontal,
+    // comme auparavant. L'index reflète donc exactement cet état de l'image.
+    rebuildBarbedSpatialIndex();
+    for (const ally of allies) if (ally.alive) ally.update(dt, soldierWorldSpeed);
+    for (const enemy of enemies) if (enemy.alive) enemy.update(dt, soldierWorldSpeed);
+    for (const bullet of bullets) if (bullet.alive) bullet.update(dt);
+    for (const explosion of explosions) if (explosion.alive) explosion.update(dt);
+    const barbedWorldSpeed = getCurrentWorldSpeed();
+    for (const barbed of barbedWires) if (barbed.alive) barbed.update(dt, barbedWorldSpeed);
+    // Les collisions utilisent ensuite leurs nouvelles positions.
+    rebuildBarbedSpatialIndex();
 
     // --- Collision Detection ---
 
     // Bullet collisions
-    bullets.forEach(bullet => {
-        if (!bullet.alive) return; // Skip inactive bullets
+    for (const bullet of bullets) {
+        if (!bullet.alive) continue;
 
         // --- SOUND: Bullet Whiz-by ---
         // Check for enemy bullets passing close to the player
@@ -1655,7 +2030,7 @@ function updateGame(dt) {
 
         if (bullet.origin === 'ally') {
             // Ally bullets hit enemies
-            enemies.forEach(enemy => {
+            for (const enemy of enemies) {
                 if (enemy.alive && bullet.intersects(enemy)) {
                     enemy.alive = false; // Enemy killed
                     // --- SOUND: Death ---
@@ -1665,7 +2040,7 @@ function updateGame(dt) {
                     }
                     // If piercing, it continues and can hit other enemies
                 }
-            });
+            }
         } else { // origin === 'enemy'
             // Enemy bullets hit player
             if (player.alive && bullet.intersects(player)) {
@@ -1677,80 +2052,94 @@ function updateGame(dt) {
             }
 
             // Enemy bullets hit allies
-            allies.forEach(ally => {
+            for (const ally of allies) {
                 if (ally.alive && bullet.intersects(ally)) {
                     ally.alive = false; // Ally killed
                     // --- SOUND: Death ---
                     soundManager.playSound('death', ally.centerX, ally.centerY);
                     bullet.alive = false;
                 }
-            });
+            }
         }
-    });
+    }
 
     // Player vs Barbed Wire collision
     if (player.alive && !player.isCrawling) { // Only check if player is standing
-        barbedWires.forEach(barbed => {
-            if (barbed.alive && player.intersects(barbed)) {
-                player.alive = false; // Player killed by barbed wire
-                // --- SOUND: Death ---
-                soundManager.playSound('death', player.centerX, player.centerY);
-                gameOver();
-            }
-        });
+        applyBarbedWireDamage(player, true);
     }
 
      // Allies vs Barbed Wire collision
-     allies.forEach(ally => {
+     for (const ally of allies) {
         if (ally.alive && !ally.isCrawling) { // Only check if ally is standing
-             barbedWires.forEach(barbed => {
-                if (barbed.alive && ally.intersects(barbed)) {
-                     ally.alive = false; // Ally killed by barbed wire
-                     // --- SOUND: Death ---
-                     soundManager.playSound('death', ally.centerX, ally.centerY);
-                 }
-             });
+             applyBarbedWireDamage(ally);
          }
-     });
+     }
 
      // Enemies vs Barbed Wire collision (as per guide, enemies don't crawl and are vulnerable)
-     enemies.forEach(enemy => {
+     for (const enemy of enemies) {
          if (enemy.alive) { // Assuming enemies never crawl
-              barbedWires.forEach(barbed => {
-                 if (barbed.alive && enemy.intersects(barbed)) {
-                      enemy.alive = false; // Enemy killed by barbed wire
-                      // --- SOUND: Death ---
-                      soundManager.playSound('death', enemy.centerX, enemy.centerY);
-                  }
-              });
+              applyBarbedWireDamage(enemy);
           }
-      });
+      }
 
 
     // --- Cleanup (Remove dead/off-screen entities) ---
 
     // Filter out dead entities and return bullets/explosions to pools
-    bullets = bullets.filter(b => {
-        if (!b.alive) {
-            returnBullet(b); // Return to pool
-            return false;
+    let bulletWriteIndex = 0;
+    for (let i = 0; i < bullets.length; i++) {
+        const bullet = bullets[i];
+        if (bullet.alive) {
+            bullets[bulletWriteIndex++] = bullet;
+        } else {
+            returnBullet(bullet);
         }
-        return true;
-    });
+    }
+    bullets.length = bulletWriteIndex;
 
-    explosions = explosions.filter(ex => {
-         // Explosions are removed if not alive (marked by update when crater is off-screen for duration)
-         if (!ex.alive) {
-             returnExplosion(ex); // Return to pool
-             return false;
-         }
-         return true;
-    });
+    let explosionWriteIndex = 0;
+    for (let i = 0; i < explosions.length; i++) {
+        const explosion = explosions[i];
+        if (explosion.alive) {
+            explosions[explosionWriteIndex++] = explosion;
+        } else {
+            returnExplosion(explosion);
+        }
+    }
+    explosions.length = explosionWriteIndex;
 
+    let allyWriteIndex = 0;
+    for (let i = 0; i < allies.length; i++) {
+        const ally = allies[i];
+        if (ally.alive && ally.x < canvas.width + ally.w) {
+            allies[allyWriteIndex++] = ally;
+        } else {
+            returnAlly(ally);
+        }
+    }
+    allies.length = allyWriteIndex;
 
-    allies = allies.filter(a => a.alive && a.x < canvas.width + a.w); // Remove dead allies and those off-screen right (they can move right)
-    enemies = enemies.filter(e => e.alive && e.x + e.w > 0); // Remove dead enemies and those off-screen left
-    barbedWires = barbedWires.filter(b => b.alive && b.x + b.w > 0); // Remove destroyed barbed wires and those off-screen left
+    let enemyWriteIndex = 0;
+    for (let i = 0; i < enemies.length; i++) {
+        const enemy = enemies[i];
+        if (enemy.alive && enemy.x + enemy.w > 0) {
+            enemies[enemyWriteIndex++] = enemy;
+        } else {
+            returnEnemy(enemy);
+        }
+    }
+    enemies.length = enemyWriteIndex;
+
+    let barbedWriteIndex = 0;
+    for (let i = 0; i < barbedWires.length; i++) {
+        const barbed = barbedWires[i];
+        if (barbed.alive && barbed.x + barbed.w > 0) {
+            barbedWires[barbedWriteIndex++] = barbed;
+        } else {
+            returnBarbedWire(barbed);
+        }
+    }
+    barbedWires.length = barbedWriteIndex;
 }
 
 
@@ -1760,36 +2149,16 @@ function updateGame(dt) {
  *  obj doit contenir : {x,y,radius,pts[]}
  */
  function drawCrater(ctx, obj){
-    // 1) Gradient radial sol → parois → lèvre
-    const grd = ctx.createRadialGradient(
-        obj.x, obj.y, obj.radius*0.3,
-        obj.x, obj.y, obj.radius
-    );
-    grd.addColorStop(0  ,'#312b29');
-    grd.addColorStop(0.6,'#4b4543');
-    grd.addColorStop(1  ,'#6a635f');
-
-    // 2) Silhouette irrégulière
-    ctx.beginPath();
-    obj.pts.forEach( (p,i) => i===0 ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y) );
-    ctx.closePath();
-
-    // 3) Remplissage + ombre interne
-    ctx.fillStyle = grd;
-    ctx.fill();
-    ctx.save();
-        ctx.clip();
-        ctx.globalCompositeOperation = 'source-atop';
-        ctx.shadowColor = 'rgba(0,0,0,0.6)';
-        ctx.shadowBlur  = 20;
-        ctx.shadowOffsetY = 8;
-        ctx.fillRect(obj.x-obj.radius, obj.y-obj.radius, obj.radius*2, obj.radius*2);
-    ctx.restore();
-
-    // 4) Contour clair de la lèvre
-    ctx.strokeStyle = 'rgba(110,100,90,0.8)';
-    ctx.lineWidth   = 3;
-    ctx.stroke();
+    if (obj.renderCacheReady) {
+        ctx.drawImage(
+            obj.renderCache,
+            obj.x - obj.renderCacheOffset,
+            obj.y - obj.renderCacheOffset
+        );
+        drawCraterOutline(ctx, obj);
+    } else {
+        drawCraterVector(ctx, obj);
+    }
 }
 
 
@@ -1822,14 +2191,20 @@ function renderGame() {
 
     /* ---------- Tranchées réalistes ---------- */
     /* --- dessin des tranchées ------------------------------------------- */
-    trenches.forEach(t => {
+    for (const t of trenches) {
+    // Le canvas masque ce qui est hors écran, mais exécuter tous les tracés,
+    // dégradés et détails resterait coûteux. Le résultat visible est identique.
+    if (t.x - TRENCH_VISUAL_OVERFLOW >= canvas.width ||
+        t.x + TRENCH_WIDTH + TRENCH_VISUAL_OVERFLOW <= 0) continue;
 
     /* ⇢ 1. PAROI GAUCHE (ombrée, silhouette irrégulière) */
     ctx.beginPath();
-    t.leftPts.forEach((p, i) => {
-    const px = t.x + p.dx;         // dx = offset stocké dans spawnTrench
-    i ? ctx.lineTo(px, p.y) : ctx.moveTo(px, p.y);
-    });
+    for (let i = 0; i < t.leftPts.length; i++) {
+        const point = t.leftPts[i];
+        const px = t.x + point.dx;
+        if (i === 0) ctx.moveTo(px, point.y);
+        else ctx.lineTo(px, point.y);
+    }
     const wallLeftX = t.x + TRENCH_WIDTH * 0.4;
     ctx.lineTo(wallLeftX, canvas.height);
     ctx.lineTo(wallLeftX, 0);
@@ -1865,9 +2240,9 @@ function renderGame() {
 
     /* débris stockés (pas de hasard en phase draw !) */
     ctx.fillStyle = '#2f261e';
-    t.floorDebris.forEach(d => {
-    ctx.fillRect(t.x + d.dx, d.y, d.w, d.h);
-    });
+    for (const debris of t.floorDebris) {
+        ctx.fillRect(t.x + debris.dx, debris.y, debris.w, debris.h);
+    }
     ctx.restore();
 
     /* ⇢ 3. PAROI DROITE (éclaircie + fissures) */
@@ -1891,39 +2266,39 @@ function renderGame() {
     /* fissures verticales */
     ctx.strokeStyle = 'rgba(255,255,255,0.1)';
     ctx.lineWidth   = 1;
-    t.cracks.forEach(dx => {
-    const x0 = t.x + dx;
-    ctx.beginPath();
-    ctx.moveTo(x0, 0);
-    ctx.lineTo(x0, canvas.height);
-    ctx.stroke();
-    });
+    for (const crackDx of t.cracks) {
+        const x0 = t.x + crackDx;
+        ctx.beginPath();
+        ctx.moveTo(x0, 0);
+        ctx.lineTo(x0, canvas.height);
+        ctx.stroke();
+    }
     ctx.restore();
 
     /* ⇢ 4. PLANCHES TRANSVERSALES (nœuds & clous) */
-    t.planks.forEach(pl => {
+    for (const pl of t.planks) {
     /* planche */
     ctx.fillStyle = '#6e5b4d';
     ctx.fillRect(t.x, pl.y, TRENCH_WIDTH, pl.h);
 
     /* nœuds  */
     ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-    pl.knots.forEach(k => {
+    for (const k of pl.knots) {
         ctx.beginPath();
         ctx.arc(t.x + k.dx, pl.y + k.dy, 2, 0, Math.PI * 2);
         ctx.stroke();
-    });
+    }
 
     /* clous */
     ctx.fillStyle = '#ddd';
-    pl.nails.forEach(n => {
+    for (const n of pl.nails) {
         ctx.beginPath();
         ctx.arc(t.x + n.dx, pl.y + n.dy, 2, 0, Math.PI * 2);
         ctx.fill();
-    });
-    });
+    }
+    }
 
-    }); /* ------------------------------------------------------------------ */
+    } /* ------------------------------------------------------------------ */
 
 
     // … suite du dessin (cratères, entités, etc.) …
@@ -1935,33 +2310,60 @@ function renderGame() {
 
     // ── NOUVEAU : dégradé radial pour les cratères ──
     /* ---------- Cratères décoratifs ---------- */
-    decorativeCraters.forEach(c => drawCrater(ctx, c));
+    for (const c of decorativeCraters) {
+        const visualRadius = c.radius * CRATER_VISUAL_RADIUS_FACTOR;
+        if (c.x + visualRadius > 0 && c.x - visualRadius < canvas.width &&
+            c.y + visualRadius > 0 && c.y - visualRadius < canvas.height) drawCrater(ctx, c);
+    }
     
     // ────────────────────────────────────────────────
     // ────────────────────────────────────────────────
 
     // --- Cratères sous les persos (phase 'crater') ---
-    explosions.forEach(ex => {
-        if (ex.phase === 'crater' && ex.alive) ex.draw();
-    });
+    for (const ex of explosions) {
+        const visualRadius = ex.radius * CRATER_VISUAL_RADIUS_FACTOR;
+        if (ex.phase === 'crater' && ex.alive &&
+            ex.x + visualRadius > 0 && ex.x - visualRadius < canvas.width &&
+            ex.y + visualRadius > 0 && ex.y - visualRadius < canvas.height) ex.draw();
+    }
 
     // --- JOUEUR + ALLIÉS triés par profondeur ---
-    const personnages = [player, ...allies]
-        .filter(ent => ent.alive)                // on ne dessine pas les morts
-        .sort((a, b) => a.bottom - b.bottom);    // a.bottom = a.y + a.h
-    personnages.forEach(ent => ent.draw());      // dessine du plus haut (petit bottom) au plus bas
+    characterRenderOrder.length = 0;
+    if (player && player.alive && player.right > 0 && player.x < canvas.width &&
+        player.bottom > 0 && player.y < canvas.height) {
+        characterRenderOrder.push(player);
+    }
+    for (const ally of allies) {
+        if (ally.alive && ally.right > 0 && ally.x < canvas.width &&
+            ally.bottom > 0 && ally.y < canvas.height) {
+            characterRenderOrder.push(ally);
+        }
+    }
+    characterRenderOrder.sort(compareEntityDepth);
+    for (const character of characterRenderOrder) character.draw();
 
     // --- Ennemis et barbelés (pas besoin de tri ici) ---
-    enemies.forEach(e => e.alive && e.draw());
-    barbedWires.forEach(b => b.draw());
+    for (const enemy of enemies) {
+        if (enemy.alive && enemy.right > 0 && enemy.x < canvas.width &&
+            enemy.bottom > 0 && enemy.y < canvas.height) enemy.draw();
+    }
+    for (const barbed of barbedWires) {
+        if (barbed.right > 0 && barbed.x < canvas.width &&
+            barbed.bottom > 0 && barbed.y < canvas.height) barbed.draw();
+    }
 
     // --- Flèches de tir au‑dessus de tout ---
-    bullets.forEach(b => b.draw());
+    for (const bullet of bullets) {
+        if (bullet.right > 0 && bullet.x < canvas.width &&
+            bullet.bottom > 0 && bullet.y < canvas.height) bullet.draw();
+    }
 
     // --- Ombres et explosions (phases shadow/blast) ---
-    explosions.forEach(ex => {
-        if (ex.phase !== 'crater' && ex.alive) ex.draw();
-    });
+    for (const ex of explosions) {
+        if (ex.phase !== 'crater' && ex.alive &&
+            ex.x + EXPLOSION_RADIUS > 0 && ex.x - EXPLOSION_RADIUS < canvas.width &&
+            ex.y + EXPLOSION_RADIUS > 0 && ex.y - EXPLOSION_RADIUS < canvas.height) ex.draw();
+    }
 
     // UI (score and message) is handled by HTML elements outside the canvas
 }
@@ -1971,6 +2373,7 @@ function gameLoop(time) {
     if (!lastTime) lastTime = time; // Initialize lastTime on the first frame
     const dt = time - lastTime; // Delta time in milliseconds
     lastTime = time;
+    processCraterCacheQueue();
 
     if (gameState === 'waitingCharge') {
         renderGame();                   // dessine décor + entités en attente
@@ -1982,12 +2385,10 @@ function gameLoop(time) {
         updateGame(dt);
         renderGame();
 
-        // Only continue the loop if the player is still alive in 'playing' state
         if (player.alive) {
             requestAnimationFrame(gameLoop);
         } else {
-            // Game over state handled after updateGame detects player death
-            // The loop will continue in gameover state to listen for reset input
+            animationLoopRunning = false;
         }
     } else if (gameState === 'ready' || gameState === 'gameover') {
         // In ready or gameover state, just keep the loop running to listen for SPACE
