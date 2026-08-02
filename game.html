@@ -87,6 +87,10 @@ canvas{position:fixed;inset:0;display:block;touch-action:none;user-select:none;-
   transform:scale(0.96);
 }
 
+#fullscreenButton:disabled {
+  opacity:0.72;
+}
+
 #fullscreenButton[hidden] { display:none !important; }
 
 #orientationMessage {
@@ -718,32 +722,71 @@ function getFullscreenRequest() {
     return fullscreenTarget.requestFullscreen || fullscreenTarget.webkitRequestFullscreen;
 }
 
-function requestFullscreenAndStartGame() {
-    const requestFullscreen = getFullscreenRequest();
+function isFullscreenActive() {
+    return document.fullscreenElement === fullscreenTarget ||
+           document.webkitFullscreenElement === fullscreenTarget;
+}
 
-    if (typeof requestFullscreen === 'function') {
-        try {
-            const fullscreenResult = requestFullscreen.call(fullscreenTarget, {
-                navigationUI: 'hide'
-            });
-            // Un refus du navigateur ne doit jamais empêcher le jeu de démarrer.
-            if (fullscreenResult && typeof fullscreenResult.catch === 'function') {
-                fullscreenResult.catch(() => {});
-            }
-        } catch (error) {
-            // Certains Safari mobiles acceptent la méthode, mais pas ses options.
-            try {
-                const fallbackResult = requestFullscreen.call(fullscreenTarget);
-                if (fallbackResult && typeof fallbackResult.catch === 'function') {
-                    fallbackResult.catch(() => {});
-                }
-            } catch (fallbackError) {
-                // Le jeu reste jouable avec les barres du navigateur visibles.
-            }
+function showFullscreenUnavailable() {
+    fullscreenButton.disabled = false;
+    fullscreenButton.textContent = 'Plein écran indisponible';
+
+    setTimeout(() => {
+        if (gameState === 'ready') {
+            fullscreenButton.textContent = '⛶ Plein écran';
         }
+    }, 1800);
+}
+
+function waitForFullscreenChange() {
+    if (isFullscreenActive()) return Promise.resolve();
+
+    return new Promise(resolve => {
+        let timer;
+        const finish = () => {
+            clearTimeout(timer);
+            document.removeEventListener('fullscreenchange', finish);
+            document.removeEventListener('webkitfullscreenchange', finish);
+            resolve();
+        };
+
+        document.addEventListener('fullscreenchange', finish);
+        document.addEventListener('webkitfullscreenchange', finish);
+        timer = setTimeout(finish, 700);
+    });
+}
+
+async function requestFullscreenAndStartGame() {
+    if (fullscreenButton.disabled) return;
+
+    const requestFullscreen = getFullscreenRequest();
+    if (typeof requestFullscreen !== 'function') {
+        showFullscreenUnavailable();
+        return;
     }
 
-    startGame();
+    fullscreenButton.disabled = true;
+    fullscreenButton.textContent = 'Ouverture…';
+
+    try {
+        // L'appel reste directement lié au geste du doigt, comme l'exigent les
+        // navigateurs mobiles. Aucune option n'est passée pour maximiser la
+        // compatibilité avec Safari, Chrome et Firefox mobiles.
+        const fullscreenResult = requestFullscreen.call(fullscreenTarget);
+        if (fullscreenResult && typeof fullscreenResult.then === 'function') {
+            await fullscreenResult;
+        }
+        await waitForFullscreenChange();
+    } catch (error) {
+        showFullscreenUnavailable();
+        return;
+    }
+
+    if (isFullscreenActive()) {
+        startGame();
+    } else {
+        showFullscreenUnavailable();
+    }
 }
 
 // Le bouton n'est proposé que si le navigateur expose réellement une API de
