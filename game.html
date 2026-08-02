@@ -752,7 +752,7 @@ function waitForFullscreenChange() {
 
         document.addEventListener('fullscreenchange', finish);
         document.addEventListener('webkitfullscreenchange', finish);
-        timer = setTimeout(finish, 700);
+        timer = setTimeout(finish, 2000);
     });
 }
 
@@ -793,15 +793,14 @@ async function requestFullscreenAndStartGame() {
 // plein écran. La règle CSS le réserve ensuite aux téléphones et tablettes.
 fullscreenButton.hidden = typeof getFullscreenRequest() !== 'function';
 fullscreenButton.addEventListener('pointerdown', event => {
-    event.preventDefault();
+    // Empêche le pointerdown de remonter jusqu'au menu, sans annuler le click
+    // tactile que les navigateurs mobiles utilisent comme activation fiable.
     event.stopPropagation();
-    requestFullscreenAndStartGame();
 });
 
-// Activation au clavier pour les appareils tactiles munis d'un clavier externe.
+// Le véritable click (après relâchement du doigt) fournit l'activation utilisateur
+// la plus fiable pour requestFullscreen sur les navigateurs mobiles.
 fullscreenButton.addEventListener('click', event => {
-    if (event.detail !== 0) return;
-    event.preventDefault();
     event.stopPropagation();
     requestFullscreenAndStartGame();
 });
@@ -812,6 +811,7 @@ document.addEventListener('fullscreenchange', resize);
 document.addEventListener('webkitfullscreenchange', resize);
 
 document.getElementById('startMenu').addEventListener('pointerdown', event => {
+    if (event.target === fullscreenButton || fullscreenButton.contains(event.target)) return;
     if (event.pointerType === 'mouse') return;
     event.preventDefault();
     startGame();
