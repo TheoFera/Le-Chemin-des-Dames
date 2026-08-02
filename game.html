@@ -63,6 +63,32 @@ canvas{position:fixed;inset:0;display:block;touch-action:none;user-select:none;-
   -webkit-user-drag: none;
 }
 
+#fullscreenButton {
+  position:absolute;
+  top:max(10px,env(safe-area-inset-top));
+  right:max(10px,env(safe-area-inset-right));
+  display:none;
+  min-height:40px;
+  padding:8px 12px;
+  border:1px solid rgba(230,210,175,0.65);
+  border-radius:6px;
+  background:rgba(20,16,13,0.68);
+  color:#fff7e6;
+  font:600 clamp(13px,3.2vmin,16px)/1 sans-serif;
+  text-align:center;
+  box-shadow:0 2px 8px rgba(0,0,0,0.38);
+  backdrop-filter:blur(3px);
+  -webkit-backdrop-filter:blur(3px);
+  z-index:2;
+  touch-action:manipulation;
+}
+
+#fullscreenButton:active {
+  transform:scale(0.96);
+}
+
+#fullscreenButton[hidden] { display:none !important; }
+
 #orientationMessage {
   position:fixed;
   inset:0;
@@ -82,6 +108,10 @@ canvas{position:fixed;inset:0;display:block;touch-action:none;user-select:none;-
 @media (orientation:portrait) and (hover:none) and (pointer:coarse) {
   #orientationMessage { display:flex; }
 }
+
+@media (hover:none) and (pointer:coarse) {
+  #fullscreenButton { display:block; }
+}
 </style>
 </head>
 <body>
@@ -90,6 +120,7 @@ canvas{position:fixed;inset:0;display:block;touch-action:none;user-select:none;-
             <source srcset="images/menu_mobile.png" media="(hover: none) and (pointer: coarse)">
             <img src="images/menu.png" alt="Menu de L’assaut du Chemin des Dames avec les commandes du jeu">
         </picture>
+        <button id="fullscreenButton" type="button" hidden>⛶ Plein écran</button>
     </div>
       
 <canvas id="game"></canvas>
@@ -679,6 +710,63 @@ displayCanvas.addEventListener('pointerup', event => {
 
 displayCanvas.addEventListener('pointercancel', event => releaseTouchPointer(event.pointerId, false));
 displayCanvas.addEventListener('lostpointercapture', event => releaseTouchPointer(event.pointerId, false));
+
+const fullscreenButton = document.getElementById('fullscreenButton');
+const fullscreenTarget = document.documentElement;
+
+function getFullscreenRequest() {
+    return fullscreenTarget.requestFullscreen || fullscreenTarget.webkitRequestFullscreen;
+}
+
+function requestFullscreenAndStartGame() {
+    const requestFullscreen = getFullscreenRequest();
+
+    if (typeof requestFullscreen === 'function') {
+        try {
+            const fullscreenResult = requestFullscreen.call(fullscreenTarget, {
+                navigationUI: 'hide'
+            });
+            // Un refus du navigateur ne doit jamais empêcher le jeu de démarrer.
+            if (fullscreenResult && typeof fullscreenResult.catch === 'function') {
+                fullscreenResult.catch(() => {});
+            }
+        } catch (error) {
+            // Certains Safari mobiles acceptent la méthode, mais pas ses options.
+            try {
+                const fallbackResult = requestFullscreen.call(fullscreenTarget);
+                if (fallbackResult && typeof fallbackResult.catch === 'function') {
+                    fallbackResult.catch(() => {});
+                }
+            } catch (fallbackError) {
+                // Le jeu reste jouable avec les barres du navigateur visibles.
+            }
+        }
+    }
+
+    startGame();
+}
+
+// Le bouton n'est proposé que si le navigateur expose réellement une API de
+// plein écran. La règle CSS le réserve ensuite aux téléphones et tablettes.
+fullscreenButton.hidden = typeof getFullscreenRequest() !== 'function';
+fullscreenButton.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    requestFullscreenAndStartGame();
+});
+
+// Activation au clavier pour les appareils tactiles munis d'un clavier externe.
+fullscreenButton.addEventListener('click', event => {
+    if (event.detail !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    requestFullscreenAndStartGame();
+});
+
+// L'entrée en plein écran modifie la hauteur disponible sur mobile : le canvas
+// est recalculé immédiatement pour remplir la nouvelle surface sans déformation.
+document.addEventListener('fullscreenchange', resize);
+document.addEventListener('webkitfullscreenchange', resize);
 
 document.getElementById('startMenu').addEventListener('pointerdown', event => {
     if (event.pointerType === 'mouse') return;
