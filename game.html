@@ -5,10 +5,36 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>L’Assaut du Chemin des Dames</title>
 <style>
-html,body{margin:0;padding:0;background:#2b2b2b;overflow:hidden;touch-action:none;overscroll-behavior:none;}
-#ui{position:absolute;top:0;left:0;color:#fff;font-family:sans-serif;padding:10px;z-index:10;pointer-events:none;}
-#message{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;font-family:sans-serif;font-size:32px;text-align:center;pointer-events:none;z-index:10;display: none;}
-canvas{display:block;touch-action:none;user-select:none;-webkit-user-select:none;} /* Prevent margin below canvas */
+html,body{width:100%;height:100%;margin:0;padding:0;background:#000;overflow:hidden;touch-action:none;overscroll-behavior:none;}
+#ui{
+  position:fixed;
+  top:0;
+  left:0;
+  color:#fff;
+  font-family:sans-serif;
+  font-size:clamp(14px,2.2vmin,20px);
+  padding-top:max(10px,env(safe-area-inset-top));
+  padding-left:max(10px,env(safe-area-inset-left));
+  z-index:10;
+  pointer-events:none;
+}
+#message{
+  position:fixed;
+  top:50%;
+  left:50%;
+  width:min(88vw,760px);
+  transform:translate(-50%,-50%);
+  color:#fff;
+  font-family:sans-serif;
+  font-size:clamp(20px,4vmin,32px);
+  line-height:1.25;
+  text-align:center;
+  text-wrap:balance;
+  pointer-events:none;
+  z-index:10;
+  display:none;
+}
+canvas{position:fixed;inset:0;display:block;touch-action:none;user-select:none;-webkit-user-select:none;} /* Prevent margin below canvas */
 #startMenu {
   position: absolute;
   inset: 0;
@@ -31,10 +57,30 @@ canvas{display:block;touch-action:none;user-select:none;-webkit-user-select:none
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   object-position: center;
   user-select: none;
   -webkit-user-drag: none;
+}
+
+#orientationMessage {
+  position:fixed;
+  inset:0;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:calc(24px + env(safe-area-inset-top)) calc(24px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) calc(24px + env(safe-area-inset-left));
+  box-sizing:border-box;
+  background:#16120f;
+  color:#fff;
+  font:600 clamp(22px,7vw,38px)/1.25 sans-serif;
+  text-align:center;
+  z-index:30;
+  touch-action:none;
+}
+
+@media (orientation:portrait) and (hover:none) and (pointer:coarse) {
+  #orientationMessage { display:flex; }
 }
 </style>
 </head>
@@ -49,6 +95,7 @@ canvas{display:block;touch-action:none;user-select:none;-webkit-user-select:none
 <canvas id="game"></canvas>
 <div id="ui">Tranchées capturées: <span id="score">0</span></div>
 <div id="message"></div>
+<div id="orientationMessage">Tournez votre téléphone ou votre tablette pour jouer en mode paysage.</div>
 
 <!-- Sound Elements -->
 <!-- Single sounds -->
@@ -100,10 +147,29 @@ canvas{display:block;touch-action:none;user-select:none;-webkit-user-select:none
 
 <script>
 (function(){
-const canvas = document.getElementById('game');
-// Le jeu repeint tout le canvas à chaque image : le déclarer opaque évite au
-// navigateur une composition alpha inutile, sans modifier le rendu final.
-const ctx = canvas.getContext('2d', { alpha: false });
+const displayCanvas = document.getElementById('game');
+const renderCanvas = document.createElement('canvas');
+
+// Le jeu utilise toujours la hauteur logique d'un téléphone en paysage.
+// L'ordinateur et la tablette affichent ensuite exactement les mêmes
+// proportions, simplement agrandies pour occuper leur propre écran.
+const GAME_VIEW_HEIGHT = 390;
+const MAX_RENDER_PIXEL_RATIO = 2;
+let gameViewWidth = 844;
+let renderScale = 1;
+
+// Cet objet conserve l'interface canvas.width/canvas.height utilisée par toute
+// la logique du jeu, tout en séparant cette taille logique de la résolution
+// physique nécessaire aux écrans Retina.
+const canvas = {
+    get width() { return gameViewWidth; },
+    get height() { return GAME_VIEW_HEIGHT; }
+};
+
+// Le jeu repeint tout le canvas à chaque image : les deux surfaces sont opaques
+// pour éviter une composition alpha inutile.
+const ctx = renderCanvas.getContext('2d', { alpha: false });
+const displayCtx = displayCanvas.getContext('2d', { alpha: false });
 
 // --- Debug Flags ---
 const DEBUG_DRAW_HITBOXES = false; // Set to true to see the collision rectangles
@@ -470,7 +536,7 @@ window.addEventListener('keyup', e => {
 });
 
 function pointerPosition(event) {
-    const rect = canvas.getBoundingClientRect();
+    const rect = displayCanvas.getBoundingClientRect();
     return {
         x: (event.clientX - rect.left) * (canvas.width / rect.width),
         y: (event.clientY - rect.top) * (canvas.height / rect.height),
@@ -557,7 +623,7 @@ function resetTouchControls() {
     chargeInputs.touch = false;
 }
 
-canvas.addEventListener('pointerdown', event => {
+displayCanvas.addEventListener('pointerdown', event => {
     if (event.pointerType === 'mouse') return;
     event.preventDefault();
 
@@ -586,10 +652,10 @@ canvas.addEventListener('pointerdown', event => {
         else if (gameState === 'playing') beginPlayerCharge('touch');
     }
 
-    canvas.setPointerCapture(event.pointerId);
+    displayCanvas.setPointerCapture(event.pointerId);
 });
 
-canvas.addEventListener('pointermove', event => {
+displayCanvas.addEventListener('pointermove', event => {
     if (event.pointerId !== touchControls.leftPointerId) return;
     event.preventDefault();
 
@@ -598,7 +664,7 @@ canvas.addEventListener('pointermove', event => {
     updateTouchPosture(position.x, position.y);
 });
 
-canvas.addEventListener('pointerup', event => {
+displayCanvas.addEventListener('pointerup', event => {
     if (
         event.pointerId !== touchControls.leftPointerId &&
         event.pointerId !== touchControls.rightPointerId
@@ -606,13 +672,13 @@ canvas.addEventListener('pointerup', event => {
 
     event.preventDefault();
     releaseTouchPointer(event.pointerId);
-    if (canvas.hasPointerCapture(event.pointerId)) {
-        canvas.releasePointerCapture(event.pointerId);
+    if (displayCanvas.hasPointerCapture(event.pointerId)) {
+        displayCanvas.releasePointerCapture(event.pointerId);
     }
 });
 
-canvas.addEventListener('pointercancel', event => releaseTouchPointer(event.pointerId, false));
-canvas.addEventListener('lostpointercapture', event => releaseTouchPointer(event.pointerId, false));
+displayCanvas.addEventListener('pointercancel', event => releaseTouchPointer(event.pointerId, false));
+displayCanvas.addEventListener('lostpointercapture', event => releaseTouchPointer(event.pointerId, false));
 
 document.getElementById('startMenu').addEventListener('pointerdown', event => {
     if (event.pointerType === 'mouse') return;
@@ -738,10 +804,35 @@ createExplosionVisualCaches();
 
 // --- Canvas Setup and Resize ---
 function resize() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    // Adjust player Y position if canvas height changes significantly during game (optional)
-    // if (player) { player.y = Math.max(0, Math.min(canvas.height - player.h, player.y)); }
+    const cssWidth = Math.max(1, window.innerWidth);
+    const cssHeight = Math.max(1, window.innerHeight);
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, MAX_RENDER_PIXEL_RATIO);
+    const previousGameViewWidth = gameViewWidth;
+
+    // Hauteur logique fixe : les proportions vues sur téléphone restent les
+    // mêmes. Seule la largeur logique varie avec le format réel de l'écran.
+    gameViewWidth = GAME_VIEW_HEIGHT * (cssWidth / cssHeight);
+    renderScale = (cssHeight / GAME_VIEW_HEIGHT) * pixelRatio;
+
+    const backingWidth = Math.max(1, Math.round(cssWidth * pixelRatio));
+    const backingHeight = Math.max(1, Math.round(cssHeight * pixelRatio));
+    renderCanvas.width = backingWidth;
+    renderCanvas.height = backingHeight;
+    displayCanvas.width = backingWidth;
+    displayCanvas.height = backingHeight;
+    displayCanvas.style.width = `${cssWidth}px`;
+    displayCanvas.style.height = `${cssHeight}px`;
+
+    displayCtx.imageSmoothingEnabled = true;
+    displayCtx.imageSmoothingQuality = 'high';
+
+    // Si les barres du navigateur changent la largeur pendant un geste, les
+    // ancres suivent la nouvelle largeur au lieu de provoquer un faux swipe.
+    if (previousGameViewWidth > 0 && previousGameViewWidth !== gameViewWidth) {
+        const horizontalRatio = gameViewWidth / previousGameViewWidth;
+        touchControls.leftLastX *= horizontalRatio;
+        touchControls.postureAnchorX *= horizontalRatio;
+    }
 }
 window.addEventListener('resize', resize);
 resize(); // Initial resize
@@ -2879,7 +2970,11 @@ function drawLargeGroundTextureLayer(targetCtx) {
 }
 
 function renderGame() {
-   
+    // Toutes les coordonnées du jeu restent dans l'espace logique d'un
+    // téléphone. Cette transformation produit ensuite une image nette à la
+    // résolution physique de l'écran courant.
+    ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+    ctx.globalAlpha = 1;
 
     // Couleur de secours visible uniquement pendant le chargement de l'image.
     ctx.fillStyle = '#4a3f35';
@@ -3114,6 +3209,16 @@ function renderGame() {
             ex.x + EXPLOSION_RADIUS > 0 && ex.x - EXPLOSION_RADIUS < canvas.width &&
             ex.y + EXPLOSION_RADIUS > 0 && ex.y - EXPLOSION_RADIUS < canvas.height) ex.draw();
     }
+
+    // Copie finale vers le canvas visible. Les deux surfaces ont la même
+    // résolution physique, donc aucun étirement supplémentaire n'est ajouté.
+    displayCtx.setTransform(1, 0, 0, 1, 0, 0);
+    displayCtx.globalAlpha = 1;
+    displayCtx.drawImage(
+        renderCanvas,
+        0, 0, renderCanvas.width, renderCanvas.height,
+        0, 0, displayCanvas.width, displayCanvas.height
+    );
 
     // UI (score and message) is handled by HTML elements outside the canvas
 }
